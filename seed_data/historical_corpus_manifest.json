@@ -1,0 +1,31 @@
+{
+  "clients": [
+    {
+      "name": "NordTransit Logistik AG",
+      "slug": "nordtransit_logistik_ag",
+      "language": "de",
+      "deliverables": {
+        "context_pdf": "historical_customers/nordtransit_logistik_ag/nordtransit_logistik_ag_context_brief.pdf",
+        "qa_xlsx": "historical_customers/nordtransit_logistik_ag/nordtransit_logistik_ag_qa.xlsx"
+      }
+    },
+    {
+      "name": "CrownShield Insurance Services Ltd",
+      "slug": "crownshield_insurance_services_ltd",
+      "language": "en",
+      "deliverables": {
+        "context_pdf": "historical_customers/crownshield_insurance_services_ltd/crownshield_insurance_services_ltd_context_brief.pdf",
+        "qa_xlsx": "historical_customers/crownshield_insurance_services_ltd/crownshield_insurance_services_ltd_qa.xlsx"
+      }
+    },
+    {
+      "name": "Asteron Industrial Components B.V.",
+      "slug": "asteron_industrial_components_bv",
+      "language": "en",
+      "deliverables": {
+        "context_pdf": "historical_customers/asteron_industrial_components_bv/asteron_industrial_components_bv_context_brief.pdf",
+        "qa_xlsx": "historical_customers/asteron_industrial_components_bv/asteron_industrial_components_bv_qa.xlsx"
+      }
+    }
+  ]
+}

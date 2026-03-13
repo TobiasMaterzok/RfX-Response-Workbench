@@ -1,0 +1,50 @@
+.DS_Store
+
+# Environment files
+.env
+.env.*
+!.env.example
+!.env.*.example
+backend/.env*
+!backend/.env.example
+frontend/.env*
+!frontend/.env.example
+
+# Python
+.venv/
+venv/
+.python-version
+__pycache__/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+backend/.pytest_cache/
+backend/.mypy_cache/
+backend/.ruff_cache/
+backend/*.egg-info/
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+frontend/coverage/
+frontend/.vite/
+
+# Editors
+.vscode/
+.idea/
+*.code-workspace
+
+# Local data and artifacts
+storage/
+tmp/
+*.db
+*.sqlite
+*.sqlite3
+*.sqlite-shm
+*.sqlite-wal
+*.log
+.envrc

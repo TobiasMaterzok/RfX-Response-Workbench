@@ -1,0 +1,46 @@
+[
+  {
+    "product_area": "platform_overview",
+    "title": "BluePeak deployment note",
+    "body": "BluePeak can be delivered as EU-hosted SaaS, UK-hosted SaaS, private cloud, or on-premise.",
+    "language": "en",
+    "source_file_name": "product_truth.json",
+    "source_section": "deployment_models",
+    "effective_from": "2026-03-06",
+    "effective_to": null,
+    "version": "demo-2026-03-06"
+  },
+  {
+    "product_area": "bluepeak_flow",
+    "title": "BluePeak Flow feature note",
+    "body": "BluePeak Flow is used for configurable workflow automation and case management including approvals, exceptions, service requests, SLAs, rules, task routing, and audit trails.",
+    "language": "en",
+    "source_file_name": "product_truth.json",
+    "source_section": "flow_capabilities",
+    "effective_from": "2026-03-06",
+    "effective_to": null,
+    "version": "demo-2026-03-06"
+  },
+  {
+    "product_area": "bluepeak_vault",
+    "title": "BluePeak Vault feature note",
+    "body": "BluePeak Vault supports secure external document exchange with controlled access, versioning, and submission checklists for suppliers, carriers, brokers, and customers.",
+    "language": "en",
+    "source_file_name": "product_truth.json",
+    "source_section": "vault_capabilities",
+    "effective_from": "2026-03-06",
+    "effective_to": null,
+    "version": "demo-2026-03-06"
+  },
+  {
+    "product_area": "bluepeak_pulse",
+    "title": "BluePeak Pulse feature note",
+    "body": "BluePeak Pulse provides dashboards, KPI reporting, operational analytics, and governed exports for managers, analysts, and operational teams.",
+    "language": "en",
+    "source_file_name": "product_truth.json",
+    "source_section": "pulse_capabilities",
+    "effective_from": "2026-03-06",
+    "effective_to": null,
+    "version": "demo-2026-03-06"
+  }
+]

@@ -1,0 +1,88 @@
+{
+  "pipeline_version": "rfx_pipeline.v1",
+  "indexing": {
+    "embedding_model": null,
+    "current_pdf": {
+      "chunk_unit": "legacy_char",
+      "chunk_size": 900,
+      "chunk_overlap": 150,
+      "contextualize_chunks": false
+    },
+    "historical": {
+      "signature_mode": "summary_plus_analysis_items"
+    }
+  },
+  "retrieval": {
+    "query_weights": {
+      "row_context": 1.0,
+      "row_question": 1.0,
+      "user_message": 1.0,
+      "current_case_signature": 1.0,
+      "row_question_context": 1.0
+    },
+    "scoring": {
+      "semantic_weight": 1.0,
+      "keyword_weight": 1.0,
+      "historical_row_weight": 1.0,
+      "historical_case_weight": 1.0,
+      "same_language_bonus": 0.12
+    },
+    "candidate_pool": {
+      "current_case_facts": null,
+      "current_pdf_evidence": 24,
+      "product_truth": 24,
+      "historical_exemplars": 40
+    },
+    "final_quota": {
+      "current_case_facts": 3,
+      "current_pdf_evidence": 3,
+      "product_truth": 3,
+      "historical_exemplars": 3
+    },
+    "sufficiency": {
+      "threshold": 0.0
+    },
+    "broadening": {
+      "enabled": true,
+      "max_stages": 1
+    },
+    "dedup": {
+      "mode": "provenance"
+    }
+  },
+  "packing": {
+    "max_context_tokens": null,
+    "order_strategy": "source_block_order",
+    "source_block_order": [
+      "current_case_facts",
+      "raw_current_pdf",
+      "product_truth",
+      "historical_exemplars"
+    ]
+  },
+  "models": {
+    "case_profile_extraction": {
+      "model_id": "gpt-5.2",
+      "reasoning_effort": "low"
+    },
+    "answer_planning": {
+      "model_id": "gpt-5.2",
+      "reasoning_effort": "low"
+    },
+    "answer_rendering": {
+      "model_id": "gpt-5.2",
+      "reasoning_effort": "low"
+    }
+  },
+  "generation": {
+    "model_id": null,
+    "reasoning_effort": null,
+    "temperature": null,
+    "target_answer_words_min": null,
+    "target_answer_words_max": null
+  },
+  "revision": {
+    "classifier_version": "revision_classifier.v2",
+    "style_only_reuses_previous_snapshot": true
+  }
+}

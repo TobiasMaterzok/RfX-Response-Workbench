@@ -1,0 +1,54 @@
+name: Windows Smoke
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  windows-smoke:
+    runs-on: windows-latest
+    env:
+      REPO_PATH: ${{ github.workspace }}/repo with spaces
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          path: repo with spaces
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: repo with spaces/frontend/package-lock.json
+
+      - name: Bootstrap Win11 helper
+        shell: pwsh
+        working-directory: ${{ env.REPO_PATH }}
+        run: |
+          powershell -ExecutionPolicy Bypass -File .\scripts\windows\dev.ps1 bootstrap
+
+      - name: Run backend tests
+        shell: pwsh
+        working-directory: ${{ env.REPO_PATH }}
+        run: |
+          .\.venv\Scripts\python.exe -m pytest backend/tests
+
+      - name: Run frontend tests
+        shell: pwsh
+        working-directory: ${{ env.REPO_PATH }}
+        run: |
+          npm --prefix frontend run test -- --run
+
+      - name: Smoke Python entrypoints
+        shell: pwsh
+        working-directory: ${{ env.REPO_PATH }}
+        run: |
+          .\.venv\Scripts\python.exe -m app.cli --help
+          .\.venv\Scripts\python.exe -m uvicorn app.main:app --help
+          .\.venv\Scripts\python.exe -m alembic -c backend/alembic.ini heads
