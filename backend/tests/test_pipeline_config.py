@@ -10,6 +10,7 @@ from sqlalchemy import select
 
 from app.exceptions import ValidationFailure
 from app.models.entities import (
+    ArtifactBuild,
     BulkFillRequest,
     CaseProfile,
     ExecutionRun,
@@ -23,7 +24,7 @@ from app.models.entities import (
     RetrievalRun,
     RfxCase,
 )
-from app.models.enums import ModelInvocationKind
+from app.models.enums import ArtifactBuildStatus, ModelInvocationKind
 from app.pipeline.config import (
     DEFAULT_PIPELINE_PROFILE_NAME,
     artifact_index_hashes,
@@ -808,6 +809,56 @@ def test_live_case_rebuild_under_new_index_config_updates_lineage_and_unblocks_r
     retrieval_run = session.get(RetrievalRun, result.answer_version.retrieval_run_id)
     assert retrieval_run is not None
     assert retrieval_run.request_context["pipeline"]["index_config_hash"] == case.index_config_hash
+
+
+def test_live_case_rebuild_marks_replaced_builds_and_links_replacement_chain(
+    session,
+    container,
+    repo_root: Path,
+    settings,
+) -> None:
+    case = create_case(session, container=container, repo_root=repo_root, settings=settings)
+    original_current_pdf_build_id = case.current_pdf_build_id
+    original_case_profile_build_id = case.case_profile_build_id
+    assert original_current_pdf_build_id is not None
+    assert original_case_profile_build_id is not None
+    token_override = {
+        "indexing": {
+            "current_pdf": {
+                "chunk_unit": "token",
+                "chunk_size": 120,
+                "chunk_overlap": 20,
+            }
+        }
+    }
+    rebuild_case_index_artifacts(
+        session,
+        storage=container.storage,
+        ai_service=StubAIService(),
+        case=case,
+        settings=settings,
+        pipeline_override=token_override,
+    )
+    session.flush()
+    assert case.current_pdf_build_id is not None
+    assert case.case_profile_build_id is not None
+    assert case.current_pdf_build_id != original_current_pdf_build_id
+    assert case.case_profile_build_id != original_case_profile_build_id
+
+    old_current_pdf_build = session.get(ArtifactBuild, original_current_pdf_build_id)
+    old_case_profile_build = session.get(ArtifactBuild, original_case_profile_build_id)
+    new_current_pdf_build = session.get(ArtifactBuild, case.current_pdf_build_id)
+    new_case_profile_build = session.get(ArtifactBuild, case.case_profile_build_id)
+    assert old_current_pdf_build is not None
+    assert old_case_profile_build is not None
+    assert new_current_pdf_build is not None
+    assert new_case_profile_build is not None
+    assert old_current_pdf_build.status == ArtifactBuildStatus.REPLACED
+    assert old_case_profile_build.status == ArtifactBuildStatus.REPLACED
+    assert new_current_pdf_build.status == ArtifactBuildStatus.ACTIVE
+    assert new_case_profile_build.status == ArtifactBuildStatus.ACTIVE
+    assert new_current_pdf_build.replaced_build_id == old_current_pdf_build.id
+    assert new_case_profile_build.replaced_build_id == old_case_profile_build.id
 
 
 def test_historical_reimport_under_new_index_config_updates_lineage(

@@ -2,6 +2,11 @@
 
 This folder separates vendor-owned sample truth from customer-specific historical exemplar packages.
 
+The tracked files in `seed_data/` are public synthetic fixtures for demos, tests, and first-time setup.
+Do not replace them with real customer data in a clone you might later push.
+
+For private customer corpora, use `seed_data/local/` with the same folder structure. That path is gitignored on purpose.
+
 ## Layout
 
 - `historical_corpus_manifest.json`: historical corpus import manifest consumed by `python -m app.cli import-historical-corpus`
@@ -17,5 +22,7 @@ This folder separates vendor-owned sample truth from customer-specific historica
 - vendor facts live in `seed_data/product_truth/product_truth.json`, not in `historical_corpus_manifest.json`.
 - `historical_corpus_manifest.json` is intentionally limited to the customer package fields the importer actually consumes.
 - Keep filenames stable unless you update the manifest, CLI defaults, tests, and docs together.
+- the private equivalent layout under `seed_data/local/` is for real customer data you do not want tracked by git
+- when replacing private product truth, prefer `python -m app.cli reimport-product-truth --path seed_data/local/product_truth/product_truth.json`
 
 Unix/macOS convenience aliases remain available through `make import-historical-corpus` and `make import-product-truth`.

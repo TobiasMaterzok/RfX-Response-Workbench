@@ -117,6 +117,18 @@ def _latest_answer_version_for_thread(
     )
 
 
+def _latest_answer_version_for_row(
+    session: Session,
+    *,
+    row_id: UUID,
+) -> AnswerVersion | None:
+    return session.scalar(
+        select(AnswerVersion)
+        .where(AnswerVersion.questionnaire_row_id == row_id)
+        .order_by(AnswerVersion.version_number.desc())
+    )
+
+
 def _latest_retrieval_run_for_thread(
     session: Session,
     *,
@@ -321,6 +333,19 @@ def _row_response(
     )
 
 
+def _row_response_with_latest_answer(
+    session: Session,
+    *,
+    row: QuestionnaireRow,
+) -> QuestionnaireRowResponse:
+    latest_answer = _latest_answer_version_for_row(session, row_id=row.id)
+    return _row_response(
+        session,
+        row,
+        latest_answer.answer_text if latest_answer else row.answer_raw,
+    )
+
+
 def _thread_response(thread: ChatThread) -> ChatThreadResponse:
     return ChatThreadResponse(
         id=thread.id,
@@ -510,6 +535,23 @@ def _bulk_fill_job_event_response(event: BulkFillJobEvent) -> BulkFillJobEventRe
     )
 
 
+def _require_case_questionnaire_for_bulk_fill(
+    session: Session,
+    *,
+    case_id: UUID,
+    tenant_id: UUID,
+) -> tuple[RfxCase, Questionnaire]:
+    case = require_case_scope(session, case_id=case_id, tenant_id=tenant_id)
+    questionnaire = session.scalar(select(Questionnaire).where(Questionnaire.case_id == case.id))
+    if questionnaire is None:
+        raise ValidationFailure(f"Case {case.id} has no questionnaire for bulk fill.")
+    return case, questionnaire
+
+
+def _bulk_fill_response(request: BulkFillRequest) -> BulkFillResponse:
+    return BulkFillResponse(request=_bulk_fill_summary_response(request))
+
+
 @router.get("", response_model=list[CaseSummaryResponse])
 def list_cases(
     session: Session = Depends(get_session),
@@ -589,20 +631,7 @@ def get_case(
         .where(QuestionnaireRow.case_id == case.id)
         .order_by(QuestionnaireRow.source_row_number.asc())
     ).all()
-    row_responses: list[QuestionnaireRowResponse] = []
-    for row in rows:
-        latest_answer = session.scalar(
-            select(AnswerVersion)
-            .where(AnswerVersion.questionnaire_row_id == row.id)
-            .order_by(AnswerVersion.version_number.desc())
-        )
-        row_responses.append(
-            _row_response(
-                session,
-                row,
-                latest_answer.answer_text if latest_answer else row.answer_raw,
-            )
-        )
+    row_responses = [_row_response_with_latest_answer(session, row=row) for row in rows]
     threads = session.scalars(
         select(ChatThread)
         .where(ChatThread.case_id == case.id)
@@ -817,10 +846,11 @@ def request_bulk_fill(
     session: Session = Depends(get_session),
     user_context: UserContext = Depends(get_user_context),
 ) -> BulkFillResponse:
-    case = require_case_scope(session, case_id=case_id, tenant_id=user_context.tenant.id)
-    questionnaire = session.scalar(select(Questionnaire).where(Questionnaire.case_id == case.id))
-    if questionnaire is None:
-        raise ValidationFailure(f"Case {case.id} has no questionnaire for bulk fill.")
+    case, questionnaire = _require_case_questionnaire_for_bulk_fill(
+        session,
+        case_id=case_id,
+        tenant_id=user_context.tenant.id,
+    )
     request = create_initial_bulk_fill_request(
         session,
         case=case,
@@ -832,7 +862,7 @@ def request_bulk_fill(
         pipeline_override=body.pipeline_override,
         reproducibility_mode=ReproducibilityMode(body.reproducibility_mode),
     )
-    return BulkFillResponse(request=_bulk_fill_summary_response(request))
+    return _bulk_fill_response(request)
 
 
 @router.post("/{case_id}/bulk-fill/{request_id}/retry-failed", response_model=BulkFillResponse)
@@ -842,10 +872,11 @@ def retry_failed_bulk_fill(
     session: Session = Depends(get_session),
     user_context: UserContext = Depends(get_user_context),
 ) -> BulkFillResponse:
-    case = require_case_scope(session, case_id=case_id, tenant_id=user_context.tenant.id)
-    questionnaire = session.scalar(select(Questionnaire).where(Questionnaire.case_id == case.id))
-    if questionnaire is None:
-        raise ValidationFailure(f"Case {case.id} has no questionnaire for bulk fill.")
+    case, questionnaire = _require_case_questionnaire_for_bulk_fill(
+        session,
+        case_id=case_id,
+        tenant_id=user_context.tenant.id,
+    )
     source_request = _require_request_scope(session, request_id=request_id, case=case)
     request = retry_failed_bulk_fill_request(
         session,
@@ -854,7 +885,7 @@ def retry_failed_bulk_fill(
         source_request=source_request,
         user_id=user_context.user.id,
     )
-    return BulkFillResponse(request=_bulk_fill_summary_response(request))
+    return _bulk_fill_response(request)
 
 
 @router.post("/{case_id}/bulk-fill/{request_id}/resume", response_model=BulkFillResponse)
@@ -864,10 +895,11 @@ def resume_bulk_fill(
     session: Session = Depends(get_session),
     user_context: UserContext = Depends(get_user_context),
 ) -> BulkFillResponse:
-    case = require_case_scope(session, case_id=case_id, tenant_id=user_context.tenant.id)
-    questionnaire = session.scalar(select(Questionnaire).where(Questionnaire.case_id == case.id))
-    if questionnaire is None:
-        raise ValidationFailure(f"Case {case.id} has no questionnaire for bulk fill.")
+    case, questionnaire = _require_case_questionnaire_for_bulk_fill(
+        session,
+        case_id=case_id,
+        tenant_id=user_context.tenant.id,
+    )
     source_request = _require_request_scope(session, request_id=request_id, case=case)
     request = resume_bulk_fill_request(
         session,
@@ -876,7 +908,7 @@ def resume_bulk_fill(
         source_request=source_request,
         user_id=user_context.user.id,
     )
-    return BulkFillResponse(request=_bulk_fill_summary_response(request))
+    return _bulk_fill_response(request)
 
 
 @router.post("/{case_id}/bulk-fill/{request_id}/cancel", response_model=BulkFillResponse)
@@ -889,7 +921,7 @@ def cancel_bulk_fill(
     case = require_case_scope(session, case_id=case_id, tenant_id=user_context.tenant.id)
     request = _require_request_scope(session, request_id=request_id, case=case)
     request = cancel_bulk_fill_request(session, request=request)
-    return BulkFillResponse(request=_bulk_fill_summary_response(request))
+    return _bulk_fill_response(request)
 
 
 @router.post("/{case_id}/rows/{row_id}/approve", response_model=QuestionnaireRowResponse)
@@ -908,12 +940,7 @@ def approve_row_answer(
         row=row,
         answer_version_id=body.answer_version_id,
     )
-    latest_answer = session.scalar(
-        select(AnswerVersion)
-        .where(AnswerVersion.questionnaire_row_id == row.id)
-        .order_by(AnswerVersion.version_number.desc())
-    )
-    return _row_response(session, row, latest_answer.answer_text if latest_answer else row.answer_raw)
+    return _row_response_with_latest_answer(session, row=row)
 
 
 @router.post("/{case_id}/rows/{row_id}/reject", response_model=QuestionnaireRowResponse)
@@ -932,9 +959,4 @@ def reject_row_answer_route(
         row=row,
         answer_version_id=body.answer_version_id,
     )
-    latest_answer = session.scalar(
-        select(AnswerVersion)
-        .where(AnswerVersion.questionnaire_row_id == row.id)
-        .order_by(AnswerVersion.version_number.desc())
-    )
-    return _row_response(session, row, latest_answer.answer_text if latest_answer else row.answer_raw)
+    return _row_response_with_latest_answer(session, row=row)

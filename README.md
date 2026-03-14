@@ -64,11 +64,24 @@ This validates PostgreSQL reachability, creates the target database if missing, 
 powershell -ExecutionPolicy Bypass -File .\scripts\windows\dev.ps1 init-db
 ```
 
-### 4. Load the sample corpus
+### 4. Load a corpus
+
+Sample/demo path:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\windows\dev.ps1 seed-sample
 ```
+
+Real-customer/private corpus path:
+
+Historical data can be loaded from any corpus root that matches the expected manifest and folder layout. One local private example is `seed_data\local\`. The supported Win11 commands are:
+
+```powershell
+.\.venv\Scripts\python.exe -m app.cli import-historical-corpus --base-path <private-corpus-root>
+.\.venv\Scripts\python.exe -m app.cli reimport-product-truth --path <private-corpus-root>\product_truth\product_truth.json
+```
+
+When replacing an existing product-truth corpus, use `reimport-product-truth` rather than additive `import-product-truth`.
 
 ### 5. Run the services
 
@@ -182,6 +195,15 @@ make import-product-truth
 
 The included product-truth source lives at [seed_data/product_truth/product_truth.json](seed_data/product_truth/product_truth.json).
 
+If you want to load real customer data instead of the tracked synthetic sample files, point the CLI at any corpus root that matches the same layout:
+
+```bash
+python3 -m app.cli import-historical-corpus --base-path <private-corpus-root>
+python3 -m app.cli reimport-product-truth --path <private-corpus-root>/product_truth/product_truth.json
+```
+
+When replacing an existing product-truth corpus, use `reimport-product-truth` rather than additive `import-product-truth`.
+
 ### 7. Run the services
 
 This starts the backend API, the frontend UI, and optionally the worker that processes queued bulk-fill jobs.
@@ -213,6 +235,8 @@ The repo ships synthetic sample seed data under `seed_data/`, split into `seed_d
 - `make import-historical-corpus` imports historical customer Q&A exemplars.
 - `make import-product-truth` imports canonical vendor product-truth records.
 - The canonical cross-platform equivalents are `python -m app.cli import-historical-corpus` and `python -m app.cli import-product-truth`.
+- real customer corpora can be loaded from any private corpus root that matches the same layout, instead of replacing the tracked sample files in `seed_data/`
+- when replacing private product truth, use `python -m app.cli reimport-product-truth --path <private-corpus-root>/product_truth/product_truth.json`
 
 Both are needed for the full local sample setup because the app keeps historical phrasing/examples separate from vendor-truth claims.
 

@@ -49,3 +49,7 @@ tmp/
 *.sqlite-wal
 *.log
 .envrc
+
+# Private customer corpora using the same layout as seed_data/
+seed_data/local/**
+!seed_data/local/README.md

@@ -5,11 +5,44 @@ import time
 import zipfile
 from io import BytesIO, StringIO
 from pathlib import Path
+from uuid import UUID
 
 from openpyxl import load_workbook
+from sqlalchemy import select, text
 
-from app.services.bulk_fill import run_bulk_fill_worker_once
+from app.models.entities import BulkFillRowExecution, Questionnaire, RfxCase
+from app.models.enums import BulkFillRowStatus, BulkFillStatus
+from app.services.bulk_fill import create_initial_bulk_fill_request, run_bulk_fill_worker_once
 from tests.seed_paths import historical_customer_dir
+
+
+def _create_case_via_api(
+    client,
+    *,
+    auth_headers: dict[str, str],
+    repo_root: Path,
+    name: str,
+) -> dict[str, object]:
+    base = historical_customer_dir(repo_root, "nordtransit_logistik_ag")
+    with (
+        (base / "nordtransit_logistik_ag_context_brief.pdf").open("rb") as pdf_file,
+        (base / "nordtransit_logistik_ag_qa.xlsx").open("rb") as workbook_file,
+    ):
+        response = client.post(
+            "/api/cases",
+            headers=auth_headers,
+            data={"name": name, "client_name": "NordTransit Logistik AG"},
+            files={
+                "pdf": ("nordtransit_logistik_ag_context_brief.pdf", pdf_file, "application/pdf"),
+                "questionnaire": (
+                    "nordtransit_logistik_ag_qa.xlsx",
+                    workbook_file,
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                ),
+            },
+        )
+    assert response.status_code == 200
+    return response.json()
 
 
 def test_case_create_draft_export_flow(
@@ -111,7 +144,13 @@ def test_case_create_draft_export_flow(
         json={"answer_version_id": answers_response.json()[0]["id"]},
     )
     assert approve_response.status_code == 200
-    assert approve_response.json()["review_status"] == "approved"
+    approve_body = approve_response.json()
+    assert approve_body["review_status"] == "approved"
+    assert approve_body["approved_answer_version_id"] == answers_response.json()[0]["id"]
+    assert approve_body["approved_answer_text"] == answers_response.json()[0]["answer_text"]
+    assert approve_body["current_answer"] == answers_response.json()[0]["answer_text"]
+    assert approve_body["latest_attempt_state"] == "answer_available"
+    assert approve_body["latest_attempt_thread_id"] == draft_body["thread"]["id"]
 
     bulk_fill_response = client.post(
         f"/api/cases/{case_detail['id']}/bulk-fill",
@@ -214,7 +253,13 @@ def test_case_create_draft_export_flow(
         json={"answer_version_id": second_answers[0]["id"]},
     )
     assert reject_response.status_code == 200
-    assert reject_response.json()["review_status"] == "rejected"
+    reject_body = reject_response.json()
+    assert reject_body["review_status"] == "rejected"
+    assert reject_body["approved_answer_version_id"] is None
+    assert reject_body["approved_answer_text"] is None
+    assert reject_body["current_answer"] == second_answers[0]["answer_text"]
+    assert reject_body["latest_attempt_state"] == "answer_available"
+    assert reject_body["latest_attempt_thread_id"] is not None
 
     export_response = client.post(
         f"/api/cases/{case_detail['id']}/export",
@@ -277,3 +322,135 @@ def test_case_create_draft_export_flow(
         cors_zip_download_response.headers.get("access-control-expose-headers")
         == "Content-Disposition"
     )
+
+
+def test_retry_failed_bulk_fill_route_returns_new_request(
+    client,
+    auth_headers: dict[str, str],
+    session_factory,
+    repo_root: Path,
+) -> None:
+    case_detail = _create_case_via_api(
+        client,
+        auth_headers=auth_headers,
+        repo_root=repo_root,
+        name="Retry Failed Route",
+    )
+    case_id = UUID(str(case_detail["id"]))
+    with session_factory() as session:
+        case = session.get(RfxCase, case_id)
+        questionnaire = session.scalar(select(Questionnaire).where(Questionnaire.case_id == case_id))
+        assert case is not None
+        assert questionnaire is not None
+        source_request = create_initial_bulk_fill_request(
+            session,
+            case=case,
+            questionnaire=questionnaire,
+            user_id=case.created_by_user_id,
+            note="retry-route",
+        )
+        row_run = session.scalar(
+            select(BulkFillRowExecution).where(
+                BulkFillRowExecution.bulk_fill_request_id == source_request.id
+            )
+        )
+        assert row_run is not None
+        source_request.status = BulkFillStatus.FAILED
+        row_run.status = BulkFillRowStatus.FAILED
+        session.commit()
+        source_request_id = source_request.id
+
+    response = client.post(
+        f"/api/cases/{case_detail['id']}/bulk-fill/{source_request_id}/retry-failed",
+        headers=auth_headers,
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["request"]["parent_request_id"] == str(source_request_id)
+    assert body["request"]["status"] == "queued"
+
+
+def test_resume_bulk_fill_route_returns_new_request(
+    client,
+    auth_headers: dict[str, str],
+    session_factory,
+    repo_root: Path,
+) -> None:
+    case_detail = _create_case_via_api(
+        client,
+        auth_headers=auth_headers,
+        repo_root=repo_root,
+        name="Resume Route",
+    )
+    case_id = UUID(str(case_detail["id"]))
+    with session_factory() as session:
+        case = session.get(RfxCase, case_id)
+        questionnaire = session.scalar(select(Questionnaire).where(Questionnaire.case_id == case_id))
+        assert case is not None
+        assert questionnaire is not None
+        source_request = create_initial_bulk_fill_request(
+            session,
+            case=case,
+            questionnaire=questionnaire,
+            user_id=case.created_by_user_id,
+            note="resume-route",
+        )
+        row_run = session.scalar(
+            select(BulkFillRowExecution).where(
+                BulkFillRowExecution.bulk_fill_request_id == source_request.id
+            )
+        )
+        assert row_run is not None
+        source_request.status = BulkFillStatus.CANCELLED
+        row_run.status = BulkFillRowStatus.NOT_STARTED
+        session.commit()
+        source_request_id = source_request.id
+
+    response = client.post(
+        f"/api/cases/{case_detail['id']}/bulk-fill/{source_request_id}/resume",
+        headers=auth_headers,
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["request"]["parent_request_id"] == str(source_request_id)
+    assert body["request"]["status"] == "queued"
+
+
+def test_cancel_bulk_fill_route_does_not_require_questionnaire_lookup(
+    client,
+    auth_headers: dict[str, str],
+    session_factory,
+    repo_root: Path,
+) -> None:
+    case_detail = _create_case_via_api(
+        client,
+        auth_headers=auth_headers,
+        repo_root=repo_root,
+        name="Cancel Route",
+    )
+    case_id = UUID(str(case_detail["id"]))
+    with session_factory() as session:
+        case = session.get(RfxCase, case_id)
+        questionnaire = session.scalar(select(Questionnaire).where(Questionnaire.case_id == case_id))
+        assert case is not None
+        assert questionnaire is not None
+        request = create_initial_bulk_fill_request(
+            session,
+            case=case,
+            questionnaire=questionnaire,
+            user_id=case.created_by_user_id,
+            note="cancel-route",
+        )
+        request_id = request.id
+        session.execute(
+            text("DELETE FROM questionnaires WHERE id = :questionnaire_id"),
+            {"questionnaire_id": questionnaire.id.hex},
+        )
+        session.commit()
+
+    response = client.post(
+        f"/api/cases/{case_detail['id']}/bulk-fill/{request_id}/cancel",
+        headers=auth_headers,
+    )
+    assert response.status_code == 200
+    assert response.json()["request"]["status"] == "cancelled"

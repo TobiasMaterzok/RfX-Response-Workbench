@@ -12,6 +12,7 @@ from app.exceptions import ValidationFailure
 from app.models.entities import (
     ArtifactBuild,
     ExecutionRun,
+    HistoricalCaseProfile,
     ModelInvocation,
     ProductTruthRecord,
     RepoSnapshot,
@@ -210,6 +211,38 @@ def test_historical_import_creates_run_build_and_manifest(
     run = session.get(ExecutionRun, dataset.creation_run_id)
     assert run is not None
     assert run.kind == ExecutionRunKind.HISTORICAL_IMPORT
+
+
+def test_strict_eval_historical_import_records_signature_fields_and_prompt_lineage(
+    session,
+    container,
+    repo_root: Path,
+    settings,
+    monkeypatch,
+) -> None:
+    enable_strict_eval_runtime(monkeypatch)
+    context = ensure_local_identity(session, settings)
+    dataset = import_historical_corpus(
+        session,
+        ai_service=container.ai_service,
+        storage=container.storage,
+        tenant_id=context.tenant.id,
+        base_path=seed_data_root(repo_root),
+        settings=settings,
+        reproducibility_mode=ReproducibilityMode.STRICT_EVAL,
+    )
+    profiles = session.scalars(select(HistoricalCaseProfile)).all()
+    assert profiles
+    assert all(profile.signature_fields_json for profile in profiles)
+    assert all(profile.signature_text for profile in profiles)
+    assert all(profile.signature_embedding is not None for profile in profiles)
+    run = session.get(ExecutionRun, dataset.creation_run_id)
+    assert run is not None
+    manifest = build_execution_run_manifest(session, run_id=run.id)
+    invocation = next(
+        item for item in manifest["model_invocations"] if item["kind"] == "case_profile_extraction"
+    )
+    assert invocation["metadata"]["resolved_prompt_hash"]
 
 
 def test_product_truth_reimport_creates_run_and_build(

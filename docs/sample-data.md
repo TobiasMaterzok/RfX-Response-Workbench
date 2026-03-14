@@ -23,6 +23,10 @@ Store these assets under:
 
 Keep filenames stable unless an explicit migration updates the references and tests.
 
+For the public repo, those tracked paths stay synthetic.
+For real customer corpora, use the same layout in a separate private corpus root instead.
+One local example is `seed_data/local/`, but the import commands are not limited to that path.
+
 Important contract note:
 - canonical vendor facts do **not** come from `historical_corpus_manifest.json`
 - they come from `seed_data/product_truth/product_truth.json`
@@ -70,6 +74,18 @@ Languages may be German or English depending on the client.
 - Retrieval can use row text, case-profile signals, and metadata.
 - Historical answers may guide wording and structure, but must not override current case facts or product truth.
 - The separate product-truth import provides canonical vendor facts and should be loaded alongside this dataset for the full local sample setup.
+
+## Private corpus workflow
+Keep the tracked sample fixtures in `seed_data/` for public demos and tests.
+When loading real company data, point the existing CLI path flags at any private corpus root that matches the same file contract:
+
+- historical corpus: `python -m app.cli import-historical-corpus --base-path <private-corpus-root>`
+- product truth replace: `python -m app.cli reimport-product-truth --path <private-corpus-root>/product_truth/product_truth.json`
+
+On Win11 after `bootstrap`, the equivalent commands are:
+
+- `.\.venv\Scripts\python.exe -m app.cli import-historical-corpus --base-path <private-corpus-root>`
+- `.\.venv\Scripts\python.exe -m app.cli reimport-product-truth --path <private-corpus-root>\product_truth\product_truth.json`
 
 ## Required provenance fields for ingested sample rows
 At minimum, preserve:

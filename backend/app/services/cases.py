@@ -83,6 +83,70 @@ def _persist_upload(
     return upload
 
 
+def _create_live_case_artifact_builds(
+    session: Session,
+    *,
+    repro_context,
+    pipeline: PipelineSelection,
+    tenant_id,
+    case_id,
+    source_manifest,
+    replaced_current_pdf_build: ArtifactBuild | None = None,
+    replaced_case_profile_build: ArtifactBuild | None = None,
+) -> tuple[ArtifactBuild, ArtifactBuild]:
+    artifact_hashes = artifact_index_hashes(pipeline)
+    parser_version = importlib.metadata.version("pypdf")
+    tokenizer_identity = None
+    tokenizer_version = None
+    if pipeline.resolved_pipeline.indexing.current_pdf.chunk_unit == "token":
+        tokenizer_identity = pipeline.resolved_pipeline.indexing.embedding_model
+        tokenizer_version = importlib.metadata.version("tiktoken")
+    current_pdf_build = create_artifact_build(
+        session,
+        kind=ArtifactBuildKind.CURRENT_PDF,
+        repo_snapshot=repro_context.repo_snapshot,
+        runtime_snapshot=repro_context.runtime_snapshot,
+        created_by_run=repro_context.execution_run,
+        compatibility_hash=artifact_hashes.current_pdf,
+        index_config_hash=pipeline.index_config_hash,
+        tenant_id=tenant_id,
+        case_id=case_id,
+        source_manifest=source_manifest,
+        pipeline_profile_name=pipeline.profile_name,
+        algorithm_version=current_pdf_chunking_version(pipeline),
+        tokenizer_identity=tokenizer_identity,
+        tokenizer_version=tokenizer_version,
+        parser_identity="pypdf",
+        parser_version=parser_version,
+        embedding_model=pipeline.resolved_pipeline.indexing.embedding_model,
+        replaced_build=replaced_current_pdf_build,
+    )
+    case_profile_build = create_artifact_build(
+        session,
+        kind=ArtifactBuildKind.CASE_PROFILE,
+        repo_snapshot=repro_context.repo_snapshot,
+        runtime_snapshot=repro_context.runtime_snapshot,
+        created_by_run=repro_context.execution_run,
+        compatibility_hash=artifact_hashes.case_profile,
+        index_config_hash=pipeline.index_config_hash,
+        tenant_id=tenant_id,
+        case_id=case_id,
+        source_manifest=source_manifest,
+        pipeline_profile_name=pipeline.profile_name,
+        algorithm_version=CASE_PROFILE_SCHEMA_VERSION,
+        parser_identity="pypdf",
+        parser_version=parser_version,
+        embedding_model=pipeline.resolved_pipeline.indexing.embedding_model,
+        metadata_json={
+            "schema_version": CASE_PROFILE_SCHEMA_VERSION,
+            "prompt_set_version": CASE_PROFILE_PROMPT_SET_VERSION,
+            "extraction_stage_model": pipeline.resolved_pipeline.models.case_profile_extraction.model_id,
+        },
+        replaced_build=replaced_case_profile_build,
+    )
+    return current_pdf_build, case_profile_build
+
+
 def create_case_from_uploads(
     session: Session,
     *,
@@ -190,55 +254,13 @@ def create_case_from_uploads(
     ]
     session.add_all(pages)
     session.flush()
-    parser_version = importlib.metadata.version("pypdf")
-    current_pdf_build = create_artifact_build(
+    current_pdf_build, case_profile_build = _create_live_case_artifact_builds(
         session,
-        kind=ArtifactBuildKind.CURRENT_PDF,
-        repo_snapshot=repro.repo_snapshot,
-        runtime_snapshot=repro.runtime_snapshot,
-        created_by_run=repro.execution_run,
-        compatibility_hash=artifact_index_hashes(pipeline).current_pdf,
-        index_config_hash=pipeline.index_config_hash,
+        repro_context=repro,
+        pipeline=pipeline,
         tenant_id=tenant_id,
         case_id=case.id,
         source_manifest=source_manifest,
-        pipeline_profile_name=pipeline.profile_name,
-        algorithm_version=current_pdf_chunking_version(pipeline),
-        tokenizer_identity=(
-            pipeline.resolved_pipeline.indexing.embedding_model
-            if pipeline.resolved_pipeline.indexing.current_pdf.chunk_unit == "token"
-            else None
-        ),
-        tokenizer_version=(
-            importlib.metadata.version("tiktoken")
-            if pipeline.resolved_pipeline.indexing.current_pdf.chunk_unit == "token"
-            else None
-        ),
-        parser_identity="pypdf",
-        parser_version=parser_version,
-        embedding_model=pipeline.resolved_pipeline.indexing.embedding_model,
-    )
-    case_profile_build = create_artifact_build(
-        session,
-        kind=ArtifactBuildKind.CASE_PROFILE,
-        repo_snapshot=repro.repo_snapshot,
-        runtime_snapshot=repro.runtime_snapshot,
-        created_by_run=repro.execution_run,
-        compatibility_hash=artifact_index_hashes(pipeline).case_profile,
-        index_config_hash=pipeline.index_config_hash,
-        tenant_id=tenant_id,
-        case_id=case.id,
-        source_manifest=source_manifest,
-        pipeline_profile_name=pipeline.profile_name,
-        algorithm_version=CASE_PROFILE_SCHEMA_VERSION,
-        parser_identity="pypdf",
-        parser_version=parser_version,
-        embedding_model=pipeline.resolved_pipeline.indexing.embedding_model,
-        metadata_json={
-            "schema_version": CASE_PROFILE_SCHEMA_VERSION,
-            "prompt_set_version": CASE_PROFILE_PROMPT_SET_VERSION,
-            "extraction_stage_model": pipeline.resolved_pipeline.models.case_profile_extraction.model_id,
-        },
     )
     case.current_pdf_build_id = current_pdf_build.id
     case.case_profile_build_id = case_profile_build.id
@@ -518,63 +540,21 @@ def rebuild_case_index_artifacts(
     case.pipeline_config_json = pipeline.resolved_config
     case.pipeline_config_hash = pipeline.config_hash
     case.index_config_hash = pipeline.index_config_hash
-    parser_version = importlib.metadata.version("pypdf")
     replaced_current_pdf_build = (
         session.get(ArtifactBuild, case.current_pdf_build_id) if case.current_pdf_build_id else None
     )
     replaced_case_profile_build = (
         session.get(ArtifactBuild, case.case_profile_build_id) if case.case_profile_build_id else None
     )
-    current_pdf_build = create_artifact_build(
+    current_pdf_build, case_profile_build = _create_live_case_artifact_builds(
         session,
-        kind=ArtifactBuildKind.CURRENT_PDF,
-        repo_snapshot=repro.repo_snapshot,
-        runtime_snapshot=repro.runtime_snapshot,
-        created_by_run=repro.execution_run,
-        compatibility_hash=artifact_index_hashes(pipeline).current_pdf,
-        index_config_hash=pipeline.index_config_hash,
+        repro_context=repro,
+        pipeline=pipeline,
         tenant_id=case.tenant_id,
         case_id=case.id,
         source_manifest=source_manifest,
-        pipeline_profile_name=pipeline.profile_name,
-        algorithm_version=current_pdf_chunking_version(pipeline),
-        tokenizer_identity=(
-            pipeline.resolved_pipeline.indexing.embedding_model
-            if pipeline.resolved_pipeline.indexing.current_pdf.chunk_unit == "token"
-            else None
-        ),
-        tokenizer_version=(
-            importlib.metadata.version("tiktoken")
-            if pipeline.resolved_pipeline.indexing.current_pdf.chunk_unit == "token"
-            else None
-        ),
-        parser_identity="pypdf",
-        parser_version=parser_version,
-        embedding_model=pipeline.resolved_pipeline.indexing.embedding_model,
-        replaced_build=replaced_current_pdf_build,
-    )
-    case_profile_build = create_artifact_build(
-        session,
-        kind=ArtifactBuildKind.CASE_PROFILE,
-        repo_snapshot=repro.repo_snapshot,
-        runtime_snapshot=repro.runtime_snapshot,
-        created_by_run=repro.execution_run,
-        compatibility_hash=artifact_index_hashes(pipeline).case_profile,
-        index_config_hash=pipeline.index_config_hash,
-        tenant_id=case.tenant_id,
-        case_id=case.id,
-        source_manifest=source_manifest,
-        pipeline_profile_name=pipeline.profile_name,
-        algorithm_version=CASE_PROFILE_SCHEMA_VERSION,
-        parser_identity="pypdf",
-        parser_version=parser_version,
-        embedding_model=pipeline.resolved_pipeline.indexing.embedding_model,
-        metadata_json={
-            "schema_version": CASE_PROFILE_SCHEMA_VERSION,
-            "prompt_set_version": CASE_PROFILE_PROMPT_SET_VERSION,
-            "extraction_stage_model": pipeline.resolved_pipeline.models.case_profile_extraction.model_id,
-        },
-        replaced_build=replaced_case_profile_build,
+        replaced_current_pdf_build=replaced_current_pdf_build,
+        replaced_case_profile_build=replaced_case_profile_build,
     )
     case.current_pdf_build_id = current_pdf_build.id
     case.case_profile_build_id = case_profile_build.id

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from uuid import UUID
 
 from pydantic import ValidationError as PydanticValidationError
@@ -43,8 +43,6 @@ from app.services.reproducibility import (
 )
 
 CASE_SIGNATURE_VERSION = "case_signature.v1"
-
-
 def _validate_case_profile_document(
     raw_document: CaseProfileDocument,
     *,
@@ -165,6 +163,167 @@ def build_case_profile_signature_text(
     return "\n".join(line for line in lines if line)
 
 
+def _record_case_profile_extraction_invocation(
+    session: Session,
+    *,
+    ai_service: AIService,
+    pipeline: PipelineSelection,
+    generation: CaseProfileGenerationResult,
+    repro_context: ReproContext | None,
+    storage,
+) -> None:
+    if repro_context is None or storage is None:
+        return
+    record_model_invocation(
+        session,
+        storage=storage,
+        execution_run=repro_context.execution_run,
+        provider_name="openai" if embedding_model_name(ai_service) != "stub-ai-service" else "stub",
+        endpoint_kind="responses.parse",
+        kind=ModelInvocationKind.CASE_PROFILE_EXTRACTION,
+        requested_model_id=generation.requested_model_id,
+        actual_model_id=generation.actual_model_id,
+        reasoning_effort=pipeline.resolved_pipeline.models.case_profile_extraction.reasoning_effort,
+        temperature=None,
+        embedding_model_id=None,
+        tokenizer_identity=None,
+        tokenizer_version=None,
+        request_payload=generation.request_payload,
+        response_payload=generation.response_payload,
+        provider_response_id=generation.provider_response_id,
+        sdk_version=openai_sdk_version() if generation.requested_model_id != "stub-ai-service" else None,
+        service_tier=generation.service_tier,
+        usage_json=generation.usage_json,
+        metadata_json={
+            "prompt_family": "case_profile_extraction",
+            "prompt_version": CASE_PROFILE_EXTRACTION_PROMPT_VERSION,
+            "template_source": "backend/app/prompts/case_profile_extraction.py",
+            "resolved_prompt_hash": sha256_text(
+                canonical_json_text(generation.request_payload)
+            ),
+            "structured_output_schema_version": generation.structured_output.schema_version,
+            "structured_output_hash": sha256_text(
+                canonical_json_text(generation.response_payload)
+            ),
+        },
+    )
+
+
+def _embed_case_profile_text(
+    session: Session,
+    *,
+    ai_service: AIService,
+    pipeline: PipelineSelection,
+    text: str,
+    metadata_json: dict[str, object],
+    repro_context: ReproContext | None,
+    storage,
+) -> list[float]:
+    if repro_context is not None and storage is not None:
+        return embed_text_recorded(
+            session,
+            storage=storage,
+            execution_run=repro_context.execution_run,
+            ai_service=ai_service,
+            text=text,
+            model_id=pipeline.resolved_pipeline.indexing.embedding_model,
+            metadata_json=metadata_json,
+        )
+    return ai_service.embed_text(
+        text,
+        model_id=pipeline.resolved_pipeline.indexing.embedding_model,
+    )
+
+
+def _persist_case_profile_items[ProfileT: CaseProfile | HistoricalCaseProfile](
+    session: Session,
+    *,
+    profile: ProfileT,
+    document: CaseProfileDocument,
+    ai_service: AIService,
+    pipeline: PipelineSelection,
+    build_item: Callable[
+        [ProfileT, CaseProfileAnalysisItem, int, str, list[float]],
+        CaseProfileItem | HistoricalCaseProfileItem,
+    ],
+    item_artifact_family: str,
+    repro_context: ReproContext | None,
+    storage,
+) -> None:
+    for position, item in enumerate(document.analysis_items, start=1):
+        normalized_text = f"{item.prompt}\n{item.answer}"
+        embedding = _embed_case_profile_text(
+            session,
+            ai_service=ai_service,
+            pipeline=pipeline,
+            text=normalized_text,
+            metadata_json={
+                "artifact_family": item_artifact_family,
+                "analysis_item_id": item.id,
+            },
+            repro_context=repro_context,
+            storage=storage,
+        )
+        session.add(build_item(profile, item, position, normalized_text, embedding))
+
+
+def _persist_generated_case_profile[ProfileT: CaseProfile | HistoricalCaseProfile](
+    session: Session,
+    *,
+    ai_service: AIService,
+    pipeline: PipelineSelection,
+    case_id: UUID,
+    source_file_name: str,
+    source_file_hash: str,
+    client_name: str,
+    language: str,
+    page_text: Sequence[str],
+    build_profile: Callable[[CaseProfileDocument], ProfileT],
+    build_item: Callable[
+        [ProfileT, CaseProfileAnalysisItem, int, str, list[float]],
+        CaseProfileItem | HistoricalCaseProfileItem,
+    ],
+    item_artifact_family: str,
+    repro_context: ReproContext | None = None,
+    storage=None,
+) -> ProfileT:
+    generation = generate_case_profile_document(
+        ai_service=ai_service,
+        pipeline=pipeline,
+        case_id=case_id,
+        source_file_name=source_file_name,
+        source_file_hash=source_file_hash,
+        client_name=client_name,
+        language=language,
+        page_text=page_text,
+    )
+    document = generation.document
+    profile = build_profile(document)
+    session.add(profile)
+    session.flush()
+    _record_case_profile_extraction_invocation(
+        session,
+        ai_service=ai_service,
+        pipeline=pipeline,
+        generation=generation,
+        repro_context=repro_context,
+        storage=storage,
+    )
+    _persist_case_profile_items(
+        session,
+        profile=profile,
+        document=document,
+        ai_service=ai_service,
+        pipeline=pipeline,
+        build_item=build_item,
+        item_artifact_family=item_artifact_family,
+        repro_context=repro_context,
+        storage=storage,
+    )
+    session.flush()
+    return profile
+
+
 def persist_case_profile(
     session: Session,
     *,
@@ -181,7 +340,51 @@ def persist_case_profile(
     page_text = [
         page.extracted_text for page in sorted(pdf_pages, key=lambda item: item.page_number)
     ]
-    generation = generate_case_profile_document(
+    index_config_json = case_profile_index_payload(pipeline.resolved_pipeline)
+
+    def build_profile(document: CaseProfileDocument) -> CaseProfile:
+        return CaseProfile(
+            tenant_id=case.tenant_id,
+            case_id=case.id,
+            source_pdf_upload_id=upload.id,
+            schema_version=CASE_PROFILE_SCHEMA_VERSION,
+            prompt_set_version=CASE_PROFILE_PROMPT_SET_VERSION,
+            model=document.model,
+            summary=document.summary,
+            source_file_name=document.source_pdf.file_name,
+            source_file_hash=document.source_pdf.file_hash,
+            language=document.language,
+            pipeline_profile_name=pipeline.profile_name,
+            index_config_json=index_config_json,
+            index_config_hash=artifact_hashes.case_profile,
+            artifact_build_id=artifact_build_id,
+            generated_at=document.generated_at,
+            document=document.model_dump(mode="json"),
+        )
+
+    def build_item(
+        profile: CaseProfile,
+        item: CaseProfileAnalysisItem,
+        position: int,
+        normalized_text: str,
+        embedding: list[float],
+    ) -> CaseProfileItem:
+        return CaseProfileItem(
+            tenant_id=case.tenant_id,
+            case_profile_id=profile.id,
+            case_id=case.id,
+            analysis_item_id=item.id,
+            position=position,
+            prompt=item.prompt,
+            answer=item.answer,
+            confidence=item.confidence,
+            citations=item.citations,
+            normalized_text=normalized_text,
+            embedding=embedding,
+        )
+
+    profile = _persist_generated_case_profile(
+        session,
         ai_service=ai_service,
         pipeline=pipeline,
         case_id=case.id,
@@ -190,97 +393,12 @@ def persist_case_profile(
         client_name=case.client_name or case.name,
         language=case.language,
         page_text=page_text,
+        build_profile=build_profile,
+        build_item=build_item,
+        item_artifact_family="case_profile_item",
+        repro_context=repro_context,
+        storage=storage,
     )
-    document = generation.document
-    profile = CaseProfile(
-        tenant_id=case.tenant_id,
-        case_id=case.id,
-        source_pdf_upload_id=upload.id,
-        schema_version=CASE_PROFILE_SCHEMA_VERSION,
-        prompt_set_version=CASE_PROFILE_PROMPT_SET_VERSION,
-        model=document.model,
-        summary=document.summary,
-        source_file_name=document.source_pdf.file_name,
-        source_file_hash=document.source_pdf.file_hash,
-        language=document.language,
-        pipeline_profile_name=pipeline.profile_name,
-        index_config_json=case_profile_index_payload(pipeline.resolved_pipeline),
-        index_config_hash=artifact_hashes.case_profile,
-        artifact_build_id=artifact_build_id,
-        generated_at=document.generated_at,
-        document=document.model_dump(mode="json"),
-    )
-    session.add(profile)
-    session.flush()
-    if repro_context is not None and storage is not None:
-        record_model_invocation(
-            session,
-            storage=storage,
-            execution_run=repro_context.execution_run,
-            provider_name="openai" if embedding_model_name(ai_service) != "stub-ai-service" else "stub",
-            endpoint_kind="responses.parse",
-            kind=ModelInvocationKind.CASE_PROFILE_EXTRACTION,
-            requested_model_id=generation.requested_model_id,
-            actual_model_id=generation.actual_model_id,
-            reasoning_effort=pipeline.resolved_pipeline.models.case_profile_extraction.reasoning_effort,
-            temperature=None,
-            embedding_model_id=None,
-            tokenizer_identity=None,
-            tokenizer_version=None,
-            request_payload=generation.request_payload,
-            response_payload=generation.response_payload,
-            provider_response_id=generation.provider_response_id,
-            sdk_version=openai_sdk_version() if generation.requested_model_id != "stub-ai-service" else None,
-            service_tier=generation.service_tier,
-            usage_json=generation.usage_json,
-            metadata_json={
-                "prompt_family": "case_profile_extraction",
-                "prompt_version": CASE_PROFILE_EXTRACTION_PROMPT_VERSION,
-                "template_source": "backend/app/prompts/case_profile_extraction.py",
-                "resolved_prompt_hash": sha256_text(
-                    canonical_json_text(generation.request_payload)
-                ),
-                "structured_output_schema_version": generation.structured_output.schema_version,
-                "structured_output_hash": sha256_text(
-                    canonical_json_text(generation.response_payload)
-                ),
-            },
-        )
-    for position, item in enumerate(document.analysis_items, start=1):
-        session.add(
-            CaseProfileItem(
-                tenant_id=case.tenant_id,
-                case_profile_id=profile.id,
-                case_id=case.id,
-                analysis_item_id=item.id,
-                position=position,
-                prompt=item.prompt,
-                answer=item.answer,
-                confidence=item.confidence,
-                citations=item.citations,
-                normalized_text=f"{item.prompt}\n{item.answer}",
-                embedding=(
-                    embed_text_recorded(
-                        session,
-                        storage=storage,
-                        execution_run=repro_context.execution_run,
-                        ai_service=ai_service,
-                        text=f"{item.prompt}\n{item.answer}",
-                        model_id=pipeline.resolved_pipeline.indexing.embedding_model,
-                        metadata_json={
-                            "artifact_family": "case_profile_item",
-                            "analysis_item_id": item.id,
-                        },
-                    )
-                    if repro_context is not None and storage is not None
-                    else ai_service.embed_text(
-                        f"{item.prompt}\n{item.answer}",
-                        model_id=pipeline.resolved_pipeline.indexing.embedding_model,
-                    )
-                ),
-            )
-        )
-    session.flush()
     return profile
 
 
@@ -294,7 +412,71 @@ def persist_historical_case_profile(
     repro_context: ReproContext | None = None,
     storage=None,
 ) -> HistoricalCaseProfile:
-    generation = generate_case_profile_document(
+    historical_index_config = historical_index_payload(pipeline.resolved_pipeline)
+
+    def build_profile(document: CaseProfileDocument) -> HistoricalCaseProfile:
+        signature_text = build_case_profile_signature_text(
+            summary=document.summary,
+            signature_mode=pipeline.resolved_pipeline.indexing.historical.signature_mode,
+            analysis_items=document.analysis_items,
+        )
+        return HistoricalCaseProfile(
+            tenant_id=client_package.tenant_id,
+            client_package_id=client_package.id,
+            schema_version=CASE_PROFILE_SCHEMA_VERSION,
+            prompt_set_version=CASE_PROFILE_PROMPT_SET_VERSION,
+            model=document.model,
+            summary=document.summary,
+            source_file_name=document.source_pdf.file_name,
+            source_file_hash=document.source_pdf.file_hash,
+            language=document.language,
+            generated_at=document.generated_at,
+            signature_version=CASE_SIGNATURE_VERSION,
+            signature_embedding_model=(
+                pipeline.resolved_pipeline.indexing.embedding_model
+                or embedding_model_name(ai_service)
+            ),
+            signature_fields_json={
+                "summary": document.summary,
+                "analysis_item_ids": [item.id for item in document.analysis_items],
+                "signature_mode": pipeline.resolved_pipeline.indexing.historical.signature_mode,
+                "index_config": historical_index_config,
+            },
+            signature_text=signature_text,
+            signature_embedding=_embed_case_profile_text(
+                session,
+                ai_service=ai_service,
+                pipeline=pipeline,
+                text=signature_text,
+                metadata_json={"artifact_family": "historical_case_profile_signature"},
+                repro_context=repro_context,
+                storage=storage,
+            ),
+            document=document.model_dump(mode="json"),
+        )
+
+    def build_item(
+        profile: HistoricalCaseProfile,
+        item: CaseProfileAnalysisItem,
+        position: int,
+        normalized_text: str,
+        embedding: list[float],
+    ) -> HistoricalCaseProfileItem:
+        return HistoricalCaseProfileItem(
+            tenant_id=client_package.tenant_id,
+            historical_case_profile_id=profile.id,
+            analysis_item_id=item.id,
+            position=position,
+            prompt=item.prompt,
+            answer=item.answer,
+            confidence=item.confidence,
+            citations=item.citations,
+            normalized_text=normalized_text,
+            embedding=embedding,
+        )
+
+    profile = _persist_generated_case_profile(
+        session,
         ai_service=ai_service,
         pipeline=pipeline,
         case_id=client_package.id,
@@ -303,122 +485,10 @@ def persist_historical_case_profile(
         client_name=client_package.client_name,
         language=client_package.language,
         page_text=page_text,
+        build_profile=build_profile,
+        build_item=build_item,
+        item_artifact_family="historical_case_profile_item",
+        repro_context=repro_context,
+        storage=storage,
     )
-    document = generation.document
-    signature_text = build_case_profile_signature_text(
-        summary=document.summary,
-        signature_mode=pipeline.resolved_pipeline.indexing.historical.signature_mode,
-        analysis_items=document.analysis_items,
-    )
-    profile = HistoricalCaseProfile(
-        tenant_id=client_package.tenant_id,
-        client_package_id=client_package.id,
-        schema_version=CASE_PROFILE_SCHEMA_VERSION,
-        prompt_set_version=CASE_PROFILE_PROMPT_SET_VERSION,
-        model=document.model,
-        summary=document.summary,
-        source_file_name=document.source_pdf.file_name,
-        source_file_hash=document.source_pdf.file_hash,
-        language=document.language,
-        generated_at=document.generated_at,
-        signature_version=CASE_SIGNATURE_VERSION,
-        signature_embedding_model=(
-            pipeline.resolved_pipeline.indexing.embedding_model
-            or embedding_model_name(ai_service)
-        ),
-        signature_fields_json={
-            "summary": document.summary,
-            "analysis_item_ids": [item.id for item in document.analysis_items],
-            "signature_mode": pipeline.resolved_pipeline.indexing.historical.signature_mode,
-            "index_config": historical_index_payload(pipeline.resolved_pipeline),
-        },
-        signature_text=signature_text,
-        signature_embedding=(
-            embed_text_recorded(
-                session,
-                storage=storage,
-                execution_run=repro_context.execution_run,
-                ai_service=ai_service,
-                text=signature_text,
-                model_id=pipeline.resolved_pipeline.indexing.embedding_model,
-                metadata_json={"artifact_family": "historical_case_profile_signature"},
-            )
-            if repro_context is not None and storage is not None
-            else ai_service.embed_text(
-                signature_text,
-                model_id=pipeline.resolved_pipeline.indexing.embedding_model,
-            )
-        ),
-        document=document.model_dump(mode="json"),
-    )
-    session.add(profile)
-    session.flush()
-    if repro_context is not None and storage is not None:
-        record_model_invocation(
-            session,
-            storage=storage,
-            execution_run=repro_context.execution_run,
-            provider_name="openai" if embedding_model_name(ai_service) != "stub-ai-service" else "stub",
-            endpoint_kind="responses.parse",
-            kind=ModelInvocationKind.CASE_PROFILE_EXTRACTION,
-            requested_model_id=generation.requested_model_id,
-            actual_model_id=generation.actual_model_id,
-            reasoning_effort=pipeline.resolved_pipeline.models.case_profile_extraction.reasoning_effort,
-            temperature=None,
-            embedding_model_id=None,
-            tokenizer_identity=None,
-            tokenizer_version=None,
-            request_payload=generation.request_payload,
-            response_payload=generation.response_payload,
-            provider_response_id=generation.provider_response_id,
-            sdk_version=openai_sdk_version() if generation.requested_model_id != "stub-ai-service" else None,
-            service_tier=generation.service_tier,
-            usage_json=generation.usage_json,
-            metadata_json={
-                "prompt_family": "case_profile_extraction",
-                "prompt_version": CASE_PROFILE_EXTRACTION_PROMPT_VERSION,
-                "template_source": "backend/app/prompts/case_profile_extraction.py",
-                "resolved_prompt_hash": sha256_text(
-                    canonical_json_text(generation.request_payload)
-                ),
-                "structured_output_schema_version": generation.structured_output.schema_version,
-                "structured_output_hash": sha256_text(
-                    canonical_json_text(generation.response_payload)
-                ),
-            },
-        )
-    for position, item in enumerate(document.analysis_items, start=1):
-        session.add(
-            HistoricalCaseProfileItem(
-                tenant_id=client_package.tenant_id,
-                historical_case_profile_id=profile.id,
-                analysis_item_id=item.id,
-                position=position,
-                prompt=item.prompt,
-                answer=item.answer,
-                confidence=item.confidence,
-                citations=item.citations,
-                normalized_text=f"{item.prompt}\n{item.answer}",
-                embedding=(
-                    embed_text_recorded(
-                        session,
-                        storage=storage,
-                        execution_run=repro_context.execution_run,
-                        ai_service=ai_service,
-                        text=f"{item.prompt}\n{item.answer}",
-                        model_id=pipeline.resolved_pipeline.indexing.embedding_model,
-                        metadata_json={
-                            "artifact_family": "historical_case_profile_item",
-                            "analysis_item_id": item.id,
-                        },
-                    )
-                    if repro_context is not None and storage is not None
-                    else ai_service.embed_text(
-                        f"{item.prompt}\n{item.answer}",
-                        model_id=pipeline.resolved_pipeline.indexing.embedding_model,
-                    )
-                ),
-            )
-        )
-    session.flush()
     return profile

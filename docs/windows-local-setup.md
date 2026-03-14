@@ -50,11 +50,22 @@ Then initialize the local database and identity:
 powershell -ExecutionPolicy Bypass -File .\scripts\windows\dev.ps1 init-db
 ```
 
-Load the sample corpus:
+Sample/demo path:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\windows\dev.ps1 seed-sample
 ```
+
+Real-customer/private corpus path:
+
+Historical data can be loaded from any corpus root that matches the expected manifest and folder layout. One local private example is `seed_data\local\`. The supported Win11 commands are:
+
+```powershell
+.\.venv\Scripts\python.exe -m app.cli import-historical-corpus --base-path <private-corpus-root>
+.\.venv\Scripts\python.exe -m app.cli reimport-product-truth --path <private-corpus-root>\product_truth\product_truth.json
+```
+
+When replacing an existing product-truth corpus, use `reimport-product-truth` rather than additive `import-product-truth`.
 
 Run the services in separate PowerShell windows:
 
