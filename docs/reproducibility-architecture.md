@@ -73,6 +73,9 @@ The repo exposes two modes:
 
 `strict_eval` is for controlled external benchmarking and fails loudly when required lineage is missing.
 
+For benchmark isolation, operators should treat `RFX_DATABASE_URL` and `RFX_STORAGE_ROOT` as a paired baseline.
+If you clone a benchmark database into a throwaway database for one sweep run, use a distinct storage root for that run as well whenever the workflow may create or read filesystem-backed objects such as rebuilt artifacts or exports.
+
 ## Strict-Eval Guarantees
 
 When a run is started in `strict_eval`, the repo requires:
@@ -154,6 +157,14 @@ python3 -m app.cli rebuild-case-index-artifacts <case-id> --reproducibility-mode
 python3 -m app.cli export-run-manifest <run-id> --output-path ./reference-manifests/<name>.json
 ```
 
+Recommended benchmark-clone pattern:
+
+- keep one frozen baseline database and storage root
+- clone the baseline database into a throwaway benchmark database per knob set
+- point `RFX_DATABASE_URL` at that throwaway database for the run
+- point `RFX_STORAGE_ROOT` at a matching throwaway storage directory for the run when artifacts or exports may be touched
+- drop the throwaway database and remove the throwaway storage directory after the run
+
 On Win11, use the same commands from an activated venv or the helper flow in [windows-local-setup.md](windows-local-setup.md).
 
 ## Reference Run Fixtures
@@ -165,6 +176,8 @@ Minimal process:
 - run one or more known draft/export flows
 - export the resulting `execution_run` manifests
 - treat those manifest JSON files as the reference interoperability fixtures for external tooling
+
+The exported run manifest includes the captured runtime env fingerprint, including the resolved `storage_root`, so external tooling can distinguish runs that executed against different storage baselines.
 
 Prefer exporting these manifests outside the tracked repo tree so the repository baseline stays clean.
 

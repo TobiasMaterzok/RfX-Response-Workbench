@@ -145,6 +145,9 @@ def test_strict_eval_case_creation_records_case_profile_lineage(
     invocation = next(
         item for item in manifest["model_invocations"] if item["kind"] == "case_profile_extraction"
     )
+    assert manifest["runtime_snapshot"]["env_fingerprint"]["storage_root"] == str(
+        settings.storage_root.resolve()
+    )
     assert invocation["metadata"]["resolved_prompt_hash"]
 
 

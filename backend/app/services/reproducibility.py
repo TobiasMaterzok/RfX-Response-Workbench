@@ -880,6 +880,7 @@ def build_execution_run_manifest(session: Session, *, run_id: UUID) -> dict[str,
             "db_version": runtime_snapshot.db_version,
             "pgvector_version": runtime_snapshot.pgvector_version,
             "package_versions": runtime_snapshot.package_versions_json,
+            "env_fingerprint": runtime_snapshot.env_fingerprint_json,
             "env_fingerprint_hash": runtime_snapshot.env_fingerprint_hash,
         },
         "source_manifest": (
