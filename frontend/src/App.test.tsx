@@ -15,11 +15,13 @@ describe("App", () => {
     fetchMock.mockReset();
     vi.stubGlobal("fetch", fetchMock);
     vi.unstubAllEnvs();
+    window.history.replaceState({}, "", "/");
   });
 
   afterEach(() => {
     vi.unstubAllGlobals();
     vi.unstubAllEnvs();
+    window.history.replaceState({}, "", "/");
   });
 
   it("shows selected file names in the create-case form", async () => {
@@ -923,8 +925,153 @@ describe("App", () => {
       expect(screen.getByText("Developer tools")).toBeInTheDocument();
     });
 
-    expect(screen.getByText("Data browser")).toBeInTheDocument();
+    expect(screen.getByText("Database view")).toBeInTheDocument();
     expect(screen.getByDisplayValue("Prompt body")).toBeInTheDocument();
+  });
+
+  it("toggles the database view from the sidebar header button", async () => {
+    fetchMock.mockImplementation(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const method = init?.method ?? "GET";
+
+        if (url.endsWith("/api/session/context")) {
+          return new Response(
+            JSON.stringify({
+              tenant_id: "tenant-1",
+              tenant_slug: "local-workspace",
+              tenant_name: "Local Workspace",
+              user_id: "user-1",
+              user_email: "local.user.test",
+              user_name: "Local Admin",
+            }),
+          );
+        }
+
+        if (url.endsWith("/api/cases") && method === "GET") {
+          return new Response(
+            JSON.stringify([
+              {
+                id: "case-1",
+                name: "Crown",
+                client_name: "CrownShield",
+                language: "en",
+                status: "active",
+                created_at: "2026-03-06T10:00:00Z",
+                updated_at: "2026-03-06T10:00:00Z",
+              },
+            ]),
+          );
+        }
+
+        if (url.endsWith("/api/cases/case-1") && method === "GET") {
+          return new Response(
+            JSON.stringify({
+              id: "case-1",
+              name: "Crown",
+              client_name: "CrownShield",
+              language: "en",
+              status: "active",
+              created_at: "2026-03-06T10:00:00Z",
+              updated_at: "2026-03-06T10:00:00Z",
+              profile: null,
+              latest_bulk_fill: null,
+              bulk_fill_history: [],
+              questionnaire_rows: [],
+              chats: [],
+            }),
+          );
+        }
+
+        if (url.endsWith("/api/dev/tables") && method === "GET") {
+          return new Response(
+            JSON.stringify({
+              tables: [
+                {
+                  name: "answer_versions",
+                  row_count: 4,
+                  case_filter_supported: true,
+                },
+                {
+                  name: "execution_runs",
+                  row_count: 12,
+                  case_filter_supported: true,
+                },
+              ],
+            }),
+          );
+        }
+
+        if (
+          url.includes("/api/dev/tables/answer_versions") &&
+          method === "GET"
+        ) {
+          return new Response(
+            JSON.stringify({
+              table_name: "answer_versions",
+              row_count: 4,
+              case_filter_applied: true,
+              columns: ["id", "status", "version_number"],
+              rows: [
+                {
+                  id: "answer-1",
+                  status: "accepted",
+                  version_number: 1,
+                },
+              ],
+            }),
+          );
+        }
+
+        return new Response(JSON.stringify({ detail: "Unhandled request" }), {
+          status: 500,
+        });
+      },
+    );
+
+    render(<App />);
+
+    await waitFor(() => {
+      expect(
+        screen.getByRole("button", { name: "Database" }),
+      ).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Database" }));
+
+    await waitFor(() => {
+      expect(
+        screen.getByRole("heading", { name: "Backend records" }),
+      ).toBeInTheDocument();
+      expect(
+        screen.getByRole("heading", { name: "Answer Versions" }),
+      ).toBeInTheDocument();
+      expect(screen.getByText("accepted")).toBeInTheDocument();
+    });
+
+    expect(
+      screen.getByText(
+        "Inspect scoped workflow state, lineage artifacts, and export surfaces without leaving the drafting workstation.",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getAllByText("answer_versions")[0]).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "Reviewing case-scoped rows for Crown where table lineage supports case filters.",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByText("preview 50 rows")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Database" }));
+
+    await waitFor(() => {
+      expect(
+        screen.queryByRole("heading", { name: "Backend records" }),
+      ).not.toBeInTheDocument();
+      expect(
+        screen.getByRole("heading", { name: "Questionnaire rows" }),
+      ).toBeInTheDocument();
+    });
   });
 
   it("disables drafting controls while waiting for the model response", async () => {
@@ -2943,6 +3090,13 @@ describe("App", () => {
     });
 
     fireEvent.click(screen.getByRole("button", { name: "History" }));
+
+    await waitFor(() => {
+      expect(
+        screen.getByRole("button", { name: /Version 1/ }),
+      ).toBeInTheDocument();
+    });
+
     fireEvent.click(screen.getByRole("button", { name: /Version 1/ }));
 
     await waitFor(() => {

@@ -179,6 +179,67 @@ function toSentenceCase(value: string): string {
   return `${normalized.charAt(0).toUpperCase()}${normalized.slice(1)}`;
 }
 
+function initialViewModeFromLocation(): ViewMode {
+  if (typeof window === "undefined") {
+    return "workspace";
+  }
+  const params = new URLSearchParams(window.location.search);
+  return params.get("page") === "data-browser"
+    ? "data-browser"
+    : "workspace";
+}
+
+function syncViewModeToLocation(mode: ViewMode): void {
+  if (typeof window === "undefined") {
+    return;
+  }
+  const url = new URL(window.location.href);
+  if (mode === "data-browser") {
+    url.searchParams.set("page", "data-browser");
+  } else if (url.searchParams.get("page") === "data-browser") {
+    url.searchParams.delete("page");
+  }
+  const nextSearch = url.searchParams.toString();
+  const nextUrl = `${url.pathname}${nextSearch ? `?${nextSearch}` : ""}${url.hash}`;
+  window.history.replaceState({}, "", nextUrl);
+}
+
+function humanizeTableName(value: string): string {
+  return value
+    .split("_")
+    .filter(Boolean)
+    .map((segment) => {
+      if (segment === "qa") {
+        return "QA";
+      }
+      if (segment === "rfx") {
+        return "RfX";
+      }
+      return toSentenceCase(segment);
+    })
+    .join(" ");
+}
+
+function dataBrowserScopeSummary(
+  selectedCase: CaseDetail | null,
+  useSelectedCaseFilter: boolean,
+): string {
+  if (selectedCase && useSelectedCaseFilter) {
+    return `Reviewing case-scoped rows for ${selectedCase.name} where table lineage supports case filters.`;
+  }
+  return "Reviewing tenant-scoped rows across the active workspace.";
+}
+
+function dataBrowserScopeChipLabel(
+  selectedCase: CaseDetail | null,
+  useSelectedCaseFilter: boolean,
+): string {
+  if (selectedCase && useSelectedCaseFilter) {
+    return `${selectedCase.name} scope`;
+  }
+  return "tenant scope";
+}
+
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -1056,7 +1117,9 @@ function App() {
   const [status, setStatus] = useState<string>("Loading session...");
   const [formState, setFormState] = useState<CreateCaseState>(emptyCaseState);
   const [isDrafting, setIsDrafting] = useState(false);
-  const [viewMode, setViewMode] = useState<ViewMode>("workspace");
+  const [viewMode, setViewMode] = useState<ViewMode>(() =>
+    initialViewModeFromLocation(),
+  );
   const [devTables, setDevTables] = useState<DevTableSummary[]>([]);
   const [selectedDevTable, setSelectedDevTable] = useState<string | null>(null);
   const [devTableRows, setDevTableRows] = useState<DevTableRowsResponse | null>(
@@ -1085,7 +1148,7 @@ function App() {
     null,
   );
   const [isEvidenceResizing, setIsEvidenceResizing] = useState(false);
-  const activeViewMode: ViewMode = devPanelsEnabled ? viewMode : "workspace";
+  const activeViewMode: ViewMode = viewMode;
   const workspaceLoadIdRef = useRef(0);
   const workspaceRef = useRef<HTMLElement | null>(null);
   const answerPanelRef = useRef<HTMLElement | null>(null);
@@ -1127,6 +1190,14 @@ function App() {
       ) ?? null
     );
   }, [answerVersions, selectedRow]);
+  const selectedDevTableSummary = useMemo(
+    () => devTables.find((table) => table.name === selectedDevTable) ?? null,
+    [devTables, selectedDevTable],
+  );
+  const setAppViewMode = useCallback((nextViewMode: ViewMode) => {
+    setViewMode(nextViewMode);
+    syncViewModeToLocation(nextViewMode);
+  }, []);
   const activeAttemptState = selectedAnswerVersion
     ? "answer_available"
     : selectedCase && selectedRow
@@ -2083,6 +2154,24 @@ function App() {
                   >
                     Help
                   </a>
+                  <button
+                    type="button"
+                    className={
+                      activeViewMode === "data-browser"
+                        ? "panel-toggle sidebar-toggle active"
+                        : "panel-toggle sidebar-toggle"
+                    }
+                    onClick={() =>
+                      setAppViewMode(
+                        activeViewMode === "data-browser"
+                          ? "workspace"
+                          : "data-browser",
+                      )
+                    }
+                    aria-pressed={activeViewMode === "data-browser"}
+                  >
+                    Database
+                  </button>
                 </div>
               </div>
               <div className="sidebar-header-controls">
@@ -2108,7 +2197,7 @@ function App() {
                         ? "mode-button active"
                         : "mode-button"
                     }
-                    onClick={() => setViewMode("workspace")}
+                    onClick={() => setAppViewMode("workspace")}
                   >
                     Workspace
                   </button>
@@ -2119,9 +2208,9 @@ function App() {
                         ? "mode-button active"
                         : "mode-button"
                     }
-                    onClick={() => setViewMode("data-browser")}
+                    onClick={() => setAppViewMode("data-browser")}
                   >
-                    Data browser
+                    Database view
                   </button>
                 </div>
               </section>
@@ -3523,20 +3612,52 @@ function App() {
       ) : (
         <main className="workspace data-browser-layout">
           <section className="panel data-browser-panel">
-            <div className="panel-header">
+            <div className="panel-header data-browser-header">
               <div>
-                <p className="eyebrow">Developer tools</p>
-                <h2>Backend tables</h2>
+                <p className="eyebrow">Database view</p>
+                <h2>Backend records</h2>
+                <p className="status-line data-browser-header-copy">
+                  Inspect scoped workflow state, lineage artifacts, and export
+                  surfaces without leaving the drafting workstation.
+                </p>
+              </div>
+              <div className="data-browser-header-rail">
+                <div className="queue-chip-row">
+                  <StatusChip
+                    label={`${devTables.length} tables`}
+                    tone="neutral"
+                    muted
+                    tooltip="Total backend tables exposed through the tenant-scoped database browser."
+                  />
+                  <StatusChip
+                    label={dataBrowserScopeChipLabel(
+                      selectedCase,
+                      useSelectedCaseFilter,
+                    )}
+                    tone={selectedCase && useSelectedCaseFilter ? "accent" : "neutral"}
+                    muted
+                    tooltip={dataBrowserScopeSummary(
+                      selectedCase,
+                      useSelectedCaseFilter,
+                    )}
+                  />
+                  <StatusChip
+                    label="preview 50 rows"
+                    tone="neutral"
+                    muted
+                    tooltip="The browser previews up to 50 rows from the selected table at a time."
+                  />
+                </div>
               </div>
             </div>
-            <p className="status-line">
-              {selectedCase && useSelectedCaseFilter
-                ? `Showing case-scoped rows for ${selectedCase.name} where supported.`
-                : "Showing tenant-scoped rows."}
-            </p>
+            <article className="data-browser-brief">
+              <p className="status-line">
+                {dataBrowserScopeSummary(selectedCase, useSelectedCaseFilter)}
+              </p>
+            </article>
             {error ? <p className="error-banner">{error}</p> : null}
-            <div className="dev-toolbar">
-              <label className="checkbox-row">
+            <div className="dev-toolbar data-browser-toolbar">
+              <label className="checkbox-row data-browser-filter-card">
                 <input
                   type="checkbox"
                   checked={useSelectedCaseFilter}
@@ -3545,50 +3666,103 @@ function App() {
                     setUseSelectedCaseFilter(event.target.checked)
                   }
                 />
-                <span>Filter to selected case where supported</span>
+                <span>Filter to the selected case where supported</span>
               </label>
+              <p className="status-line data-browser-toolbar-note">
+                Tables without case lineage stay tenant-scoped even when the
+                case filter is enabled.
+              </p>
             </div>
             <div className="data-browser-grid">
-              <article className="dev-table-list">
+              <article className="dev-table-list data-browser-table-list-panel">
                 <div className="list-header">
-                  <h3>Tables</h3>
+                  <div>
+                    <p className="eyebrow">Catalog</p>
+                    <h3>Tables</h3>
+                  </div>
                   <span>{devTables.length}</span>
                 </div>
+                <p className="status-line data-browser-panel-note">
+                  Choose one table to inspect the current tenant ledger and its
+                  case-scoped slices.
+                </p>
                 {devTables.map((table) => (
                   <button
                     key={table.name}
                     type="button"
                     className={
                       selectedDevTable === table.name
-                        ? "table-card active"
-                        : "table-card"
+                        ? "table-card data-browser-table-card active"
+                        : "table-card data-browser-table-card"
                     }
                     onClick={() => setSelectedDevTable(table.name)}
                   >
-                    <strong>{table.name}</strong>
-                    <span>{table.row_count} rows</span>
-                    <small>
+                    <div className="data-browser-table-card-top">
+                      <strong>{humanizeTableName(table.name)}</strong>
+                      <span className="meta-badge">{table.row_count} rows</span>
+                    </div>
+                    <code className="data-browser-table-key">{table.name}</code>
+                    <small className="data-browser-table-scope">
                       {table.case_filter_supported
-                        ? "case-filter ready"
+                        ? "case scope ready"
                         : "tenant scope only"}
                     </small>
                   </button>
                 ))}
               </article>
 
-              <article className="dev-table-view">
-                <div className="list-header">
-                  <h3>{selectedDevTable ?? "Select a table"}</h3>
-                  <span>{devTableRows?.row_count ?? 0}</span>
+              <article className="dev-table-view data-browser-table-view-panel">
+                <div className="list-header data-browser-table-view-header">
+                  <div>
+                    <p className="eyebrow">Selected table</p>
+                    <h3>
+                      {selectedDevTable
+                        ? humanizeTableName(selectedDevTable)
+                        : "Select a table"}
+                    </h3>
+                    {selectedDevTable ? (
+                      <code className="data-browser-table-key">
+                        {selectedDevTable}
+                      </code>
+                    ) : null}
+                  </div>
+                  <div className="queue-chip-row">
+                    <StatusChip
+                      label={`${devTableRows?.row_count ?? 0} rows`}
+                      tone="neutral"
+                      muted
+                      tooltip="Total row count currently reported for the selected table."
+                    />
+                    <StatusChip
+                      label={
+                        devTableRows?.case_filter_applied
+                          ? "case filter applied"
+                          : selectedDevTableSummary?.case_filter_supported
+                            ? "case filter available"
+                            : "tenant scope only"
+                      }
+                      tone={
+                        devTableRows?.case_filter_applied
+                          ? "accent"
+                          : "neutral"
+                      }
+                      muted
+                      tooltip={
+                        devTableRows?.case_filter_applied
+                          ? "Rows are filtered to the currently selected case."
+                          : "Rows are shown at tenant scope for the current workspace."
+                      }
+                    />
+                  </div>
                 </div>
                 {isDevLoading ? (
                   <p className="status-line">Loading table rows...</p>
                 ) : devTableRows ? (
                   <>
-                    <p className="status-line">
+                    <p className="status-line data-browser-panel-note">
                       {devTableRows.case_filter_applied
-                        ? "Case filter applied."
-                        : "Tenant scope only."}
+                        ? "Case filter applied to this preview."
+                        : "Showing tenant-scoped preview rows."}
                     </p>
                     <div className="dev-table-wrapper">
                       <table className="dev-table">
