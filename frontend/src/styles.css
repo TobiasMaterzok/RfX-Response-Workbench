@@ -107,12 +107,17 @@ input[type="checkbox"] {
 .app-shell {
   display: grid;
   grid-template-columns: 320px 1fr;
+  column-gap: 18px;
   min-height: 100vh;
   transition: grid-template-columns 180ms ease;
 }
 
 .app-shell.sidebar-collapsed {
   grid-template-columns: var(--collapsed-rail-width) 1fr;
+}
+
+.app-shell > main {
+  min-width: 0;
 }
 
 .sidebar {
@@ -763,7 +768,7 @@ input[type="checkbox"] {
 
 .evidence-panel.collapsed {
   padding: 16px 10px;
-  overflow: hidden;
+  overflow: visible;
 }
 
 .evidence-panel.collapsed .collapsed-rail-label {
@@ -1553,7 +1558,7 @@ input[type="checkbox"] {
 
 .evidence-panel {
   position: relative;
-  overflow: hidden;
+  overflow: visible;
 }
 
 .workspace > .evidence-panel {
@@ -1955,6 +1960,7 @@ input[type="checkbox"] {
 @media (max-width: 1100px) {
   .app-shell {
     grid-template-columns: 1fr;
+    column-gap: 0;
   }
 
   .app-shell > main {
