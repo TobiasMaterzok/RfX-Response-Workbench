@@ -76,7 +76,14 @@ describe("App", () => {
     ).toBeInTheDocument();
   });
 
-  it("renders evidence separately from the drafted answer", async () => {
+  it("renders evidence separately from the drafted answer and allows inspector resizing", async () => {
+    const originalInnerWidth = window.innerWidth;
+    Object.defineProperty(window, "innerWidth", {
+      configurable: true,
+      writable: true,
+      value: 1440,
+    });
+
     let drafted = false;
     fetchMock.mockImplementation(
       async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -244,7 +251,10 @@ describe("App", () => {
                   source_title: "initiative_scope",
                   excerpt: "Evidence excerpt",
                   score: 0.88,
-                  metadata: {},
+                  metadata: {
+                    confidence: "high",
+                    citations: ["Page 1", "Page 2"],
+                  },
                 },
               ],
             }),
@@ -309,7 +319,10 @@ describe("App", () => {
                   source_title: "initiative_scope",
                   excerpt: "Evidence excerpt",
                   score: 0.88,
-                  metadata: {},
+                  metadata: {
+                    confidence: "high",
+                    citations: ["Page 1", "Page 2"],
+                  },
                 },
               ],
             }),
@@ -325,22 +338,440 @@ describe("App", () => {
       },
     );
 
+    try {
+      render(<App />);
+
+      await waitFor(() => {
+        expect(screen.getByText("Questionnaire rows")).toBeInTheDocument();
+      });
+
+      fireEvent.click(screen.getByText("Generate answer"));
+
+      await waitFor(() => {
+        expect(screen.getAllByText("Draft answer body")[0]).toBeInTheDocument();
+        expect(screen.getByText("Evidence excerpt")).toBeInTheDocument();
+        expect(screen.getByText("Revise wording")).toBeInTheDocument();
+      });
+
+      expect(screen.getByText("Initiative scope")).toBeInTheDocument();
+      expect(screen.getByText("Structured case fact")).toBeInTheDocument();
+      expect(screen.getByText("Relevance 0.880")).toBeInTheDocument();
+      expect(screen.getByText("Confidence")).toBeInTheDocument();
+      expect(screen.getByText("High")).toBeInTheDocument();
+      expect(screen.getByText("Page 1, Page 2")).toBeInTheDocument();
+      expect(screen.getByText("0 approved")).toHaveAttribute(
+        "title",
+        expect.stringContaining("No rows currently have an approved answer"),
+      );
+      expect(screen.getAllByText("weak")[0]).toHaveAttribute(
+        "title",
+        expect.stringContaining("useful evidence"),
+      );
+      expect(screen.getByText("evidence refreshed")).toHaveAttribute(
+        "title",
+        expect.stringContaining("fresh evidence set"),
+      );
+      expect(screen.getByText("first draft")).toHaveAttribute(
+        "title",
+        expect.stringContaining("first drafting pass"),
+      );
+      expect(screen.getByText("Relevance 0.880")).toHaveAttribute(
+        "title",
+        expect.stringContaining("matched the selected row"),
+      );
+      expect(
+        screen.getByRole("button", { name: "Export approved" }),
+      ).toHaveAttribute("title", expect.stringContaining("approved answer"));
+      expect(screen.getByRole("button", { name: "Export latest" })).toHaveAttribute(
+        "title",
+        expect.stringContaining("newest available answer"),
+      );
+      expect(
+        screen.getByRole("button", { name: "Launch bulk-fill" }),
+      ).toHaveAttribute("title", expect.stringContaining("case-wide drafting run"));
+
+      const workspace = document.querySelector(".workspace");
+      const separator = screen.getByRole("separator", {
+        name: "Resize evidence inspector",
+      });
+
+      expect(workspace?.getAttribute("style")).toContain(
+        "--workspace-right-column: 360px",
+      );
+
+      fireEvent.keyDown(separator, { key: "ArrowLeft" });
+
+      await waitFor(() => {
+        expect(separator).toHaveAttribute("aria-valuenow", "384");
+      });
+      expect(workspace?.getAttribute("style")).toContain(
+        "--workspace-right-column: 384px",
+      );
+
+      fireEvent.click(screen.getByRole("button", { name: "Compare" }));
+
+      await waitFor(() => {
+        expect(
+          screen.getByRole("button", {
+            name: "Collapse retrieved evidence panel",
+          }),
+        ).toBeInTheDocument();
+      });
+      expect(
+        screen.queryByRole("button", {
+          name: "Expand retrieved evidence panel",
+        }),
+      ).not.toBeInTheDocument();
+
+      expect(screen.queryByText("Data browser")).not.toBeInTheDocument();
+      expect(screen.queryByDisplayValue("Prompt body")).not.toBeInTheDocument();
+    } finally {
+      Object.defineProperty(window, "innerWidth", {
+        configurable: true,
+        writable: true,
+        value: originalInnerWidth,
+      });
+    }
+  });
+
+  it("shows historical examples first and preserves section breaks inside historical evidence", async () => {
+    fetchMock.mockImplementation(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const method = init?.method ?? "GET";
+
+        if (url.endsWith("/api/session/context")) {
+          return new Response(
+            JSON.stringify({
+              tenant_id: "tenant-1",
+              tenant_slug: "local-workspace",
+              tenant_name: "Local Workspace",
+              user_id: "user-1",
+              user_email: "local.user.test",
+              user_name: "Local Admin",
+            }),
+          );
+        }
+
+        if (url.endsWith("/api/cases") && method === "GET") {
+          return new Response(
+            JSON.stringify([
+              {
+                id: "case-1",
+                name: "NordTransit Pilot",
+                client_name: "NordTransit",
+                language: "de",
+                status: "active",
+                created_at: "2026-03-06T10:00:00Z",
+                updated_at: "2026-03-06T10:00:00Z",
+              },
+            ]),
+          );
+        }
+
+        if (url.endsWith("/api/cases/case-1") && method === "GET") {
+          return new Response(
+            JSON.stringify({
+              id: "case-1",
+              name: "NordTransit Pilot",
+              client_name: "NordTransit",
+              language: "de",
+              status: "active",
+              created_at: "2026-03-06T10:00:00Z",
+              updated_at: "2026-03-06T10:00:00Z",
+              profile: null,
+              latest_bulk_fill: null,
+              questionnaire_rows: [
+                {
+                  id: "row-1",
+                  source_row_id: "workbook:QA:2",
+                  source_row_number: 2,
+                  context: "Shared context",
+                  question: "What fits the scope?",
+                  current_answer: "Draft answer body",
+                  review_status: "needs_review",
+                  approved_answer_version_id: null,
+                  approved_answer_text: null,
+                  last_error_detail: null,
+                  last_bulk_fill_request_id: null,
+                  last_bulk_fill_row_execution_id: null,
+                  last_bulk_fill_status: null,
+                  last_bulk_fill_attempt_number: null,
+                  latest_attempt_thread_id: "thread-1",
+                  latest_attempt_state: "answer_available",
+                },
+              ],
+              chats: [
+                {
+                  id: "thread-1",
+                  questionnaire_row_id: "row-1",
+                  title: "Row 2",
+                  updated_at: "2026-03-06T10:10:00Z",
+                },
+              ],
+            }),
+          );
+        }
+
+        if (
+          url.endsWith("/api/cases/case-1/rows/row-1/answers") &&
+          method === "GET"
+        ) {
+          return new Response(
+            JSON.stringify([
+              {
+                id: "answer-1",
+                chat_thread_id: "thread-1",
+                version_number: 1,
+                answer_text: "Draft answer body",
+                status: "draft",
+                created_at: "2026-03-06T10:10:00Z",
+                model: "stub-ai-service",
+                generation_path: "two_stage_plan_render",
+                llm_capture_stage: "answer_rendering",
+                prompt_version: "answer_rendering_prompt.v2",
+                llm_capture_status: "captured",
+                llm_request_text: "Prompt body",
+                llm_response_text: "Draft answer body",
+              },
+            ]),
+          );
+        }
+
+        if (
+          url.endsWith("/api/cases/case-1/threads/thread-1") &&
+          method === "GET"
+        ) {
+          return new Response(
+            JSON.stringify({
+              thread: {
+                id: "thread-1",
+                questionnaire_row_id: "row-1",
+                title: "Row 2",
+                updated_at: "2026-03-06T10:10:00Z",
+              },
+              thread_state: "answer_available",
+              messages: [],
+              answer_version: {
+                id: "answer-1",
+                chat_thread_id: "thread-1",
+                version_number: 1,
+                answer_text: "Draft answer body",
+                status: "draft",
+                created_at: "2026-03-06T10:10:00Z",
+                model: "stub-ai-service",
+                generation_path: "two_stage_plan_render",
+                llm_capture_stage: "answer_rendering",
+                prompt_version: "answer_rendering_prompt.v2",
+                llm_capture_status: "captured",
+                llm_request_text: "Prompt body",
+                llm_response_text: "Draft answer body",
+              },
+              retrieval: {
+                strategy_version: "retrieval.v2.hardened.v1",
+                revision_mode: "initial_draft",
+                revision_classifier_version: "revision_classifier.v2",
+                revision_reason: "no_previous_answer_version",
+                retrieval_action: "refresh_retrieval",
+                retrieval_action_reason:
+                  "new_or_content_change_requires_refresh",
+                reused_from_retrieval_run_id: null,
+                candidate_generation_mode: "sql_keyword_scope_python_rerank",
+                broadened: false,
+                sufficiency: "weak",
+                degraded: false,
+                notes: [],
+                stages: [],
+              },
+              evidence: [
+                {
+                  id: "evidence-historical",
+                  source_kind: "historical_qa_row",
+                  source_label: "historical_exemplar",
+                  source_title: "crownshield_insurance_services_ltd_qa.xlsx:QA:12",
+                  excerpt: [
+                    "Historical client context: CrownShield Insurance Services Ltd is a UK and Ireland specialty insurance services provider with a distributed broker network. The requested scope covers broker onboarding, policy servicing requests, low-complexity claims triage, and secure exchange of policy and claims documents. The main objective is to reduce shared-mailbox volume and create a consistent operational audit trail.",
+                    "Historical question: How do you support a phased rollout across onboarding, servicing, and claims intake?",
+                    "Historical answer exemplar: We typically start with one high-volume, low-complexity process such as broker onboarding or servicing requests, prove the operating model, and then extend the same platform to claims intake. Reusing roles, templates, notifications, and reporting reduces delivery risk and shortens each later phase.",
+                  ].join("\n"),
+                  score: 0.75,
+                  metadata: {
+                    provenance: {
+                      client_slug: "crownshield_insurance_services_ltd",
+                      source_row_number: 12,
+                    },
+                  },
+                },
+                {
+                  id: "evidence-case",
+                  source_kind: "case_profile_item",
+                  source_label: "current_case_facts",
+                  source_title: "initiative_scope",
+                  excerpt: "Evidence excerpt",
+                  score: 0.88,
+                  metadata: {
+                    confidence: "high",
+                    citations: ["Page 1", "Page 2"],
+                  },
+                },
+                {
+                  id: "evidence-product",
+                  source_kind: "product_truth_chunk",
+                  source_label: "product_truth",
+                  source_title: "BluePeak Vault feature note",
+                  excerpt: "Product truth excerpt",
+                  score: 0.65,
+                  metadata: {},
+                },
+              ],
+              failure_detail: null,
+            }),
+          );
+        }
+
+        return new Response(
+          JSON.stringify({ detail: `Unhandled request ${method} ${url}` }),
+          { status: 500 },
+        );
+      },
+    );
+
     render(<App />);
 
     await waitFor(() => {
-      expect(screen.getByText("Questionnaire rows")).toBeInTheDocument();
+      expect(screen.getByText("Historical examples")).toBeInTheDocument();
     });
 
-    fireEvent.click(screen.getByText("Generate answer"));
+    const evidenceHeadings = Array.from(
+      document.querySelectorAll(".evidence-group h3"),
+    ).map((node) => node.textContent?.trim());
+
+    expect(evidenceHeadings).toEqual([
+      "Historical examples",
+      "Current case facts",
+      "Product truth",
+    ]);
+    expect(
+      screen.getByText("Historical example · row 12"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("Crownshield Insurance Services Ltd · Row 12"),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Historical client context")).toBeInTheDocument();
+    expect(screen.getByText("Historical question")).toBeInTheDocument();
+    expect(screen.getByText("Historical answer exemplar")).toBeInTheDocument();
+    expect(
+      document.querySelectorAll(".historical-evidence-section"),
+    ).toHaveLength(3);
+  });
+
+  it("lets reviewers expand the full row background in the selected-row hero", async () => {
+    const longContext =
+      "CrownShield Insurance Services Ltd is a UK and Ireland specialty insurance services provider with a distributed broker network. The requested scope covers broker onboarding, policy servicing requests, low-complexity claims triage, and secure exchange of policy and claims documents. The main objective is to reduce shared-mailbox volume and create a consistent operational audit trail.";
+
+    fetchMock.mockImplementation(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const method = init?.method ?? "GET";
+
+        if (url.endsWith("/api/session/context")) {
+          return new Response(
+            JSON.stringify({
+              tenant_id: "tenant-1",
+              tenant_slug: "local-workspace",
+              tenant_name: "Local Workspace",
+              user_id: "user-1",
+              user_email: "local.user.test",
+              user_name: "Local Admin",
+            }),
+          );
+        }
+
+        if (url.endsWith("/api/cases") && method === "GET") {
+          return new Response(
+            JSON.stringify([
+              {
+                id: "case-1",
+                name: "NordTransit Pilot",
+                client_name: "NordTransit",
+                language: "de",
+                status: "active",
+                created_at: "2026-03-06T10:00:00Z",
+                updated_at: "2026-03-06T10:00:00Z",
+              },
+            ]),
+          );
+        }
+
+        if (url.endsWith("/api/cases/case-1") && method === "GET") {
+          return new Response(
+            JSON.stringify({
+              id: "case-1",
+              name: "NordTransit Pilot",
+              client_name: "NordTransit",
+              language: "de",
+              status: "active",
+              created_at: "2026-03-06T10:00:00Z",
+              updated_at: "2026-03-06T10:00:00Z",
+              profile: null,
+              latest_bulk_fill: null,
+              questionnaire_rows: [
+                {
+                  id: "row-1",
+                  source_row_id: "workbook:QA:2",
+                  source_row_number: 2,
+                  context: longContext,
+                  question:
+                    "Which products would you propose for the requested scope?",
+                  current_answer: "",
+                  review_status: "not_started",
+                  approved_answer_version_id: null,
+                  approved_answer_text: null,
+                  last_error_detail: null,
+                  last_bulk_fill_request_id: null,
+                  last_bulk_fill_row_execution_id: null,
+                  last_bulk_fill_status: null,
+                  last_bulk_fill_attempt_number: null,
+                  latest_attempt_thread_id: null,
+                  latest_attempt_state: "none",
+                },
+              ],
+              chats: [],
+            }),
+          );
+        }
+
+        if (
+          url.endsWith("/api/cases/case-1/rows/row-1/answers") &&
+          method === "GET"
+        ) {
+          return new Response(JSON.stringify([]));
+        }
+
+        return new Response(
+          JSON.stringify({ detail: `Unhandled request ${method} ${url}` }),
+          { status: 500 },
+        );
+      },
+    );
+
+    render(<App />);
 
     await waitFor(() => {
-      expect(screen.getAllByText("Draft answer body")[0]).toBeInTheDocument();
-      expect(screen.getByText("Evidence excerpt")).toBeInTheDocument();
-      expect(screen.getByText("Revise answer")).toBeInTheDocument();
+      expect(screen.getByText("Row background")).toBeInTheDocument();
     });
 
-    expect(screen.queryByText("Data browser")).not.toBeInTheDocument();
-    expect(screen.queryByDisplayValue("Prompt body")).not.toBeInTheDocument();
+    expect(
+      document.querySelector(".workspace-hero-row-label"),
+    ).toHaveTextContent("Row 2");
+    expect(
+      document.querySelector(".workspace-hero-question"),
+    ).toHaveTextContent(
+      "Which products would you propose for the requested scope?",
+    );
+    expect(
+      screen.getByRole("button", { name: "Show full background" }),
+    ).toBeInTheDocument();
   });
 
   it("shows developer panels only when explicitly enabled", async () => {
@@ -671,13 +1102,16 @@ describe("App", () => {
 
     await waitFor(() => {
       expect(
-        screen.getByPlaceholderText(
-          "Ask for a style revision such as shorter, clearer, or more formal.",
-        ),
+        screen.getByRole("button", { name: "Revise wording" }),
       ).toBeEnabled();
       expect(
-        screen.getByRole("button", { name: "Revise answer" }),
-      ).toBeDisabled();
+        screen.getByRole("button", { name: "Regenerate content" }),
+      ).toBeEnabled();
+      expect(
+        screen.queryByPlaceholderText(
+          "Ask for a style revision such as shorter, clearer, or more formal.",
+        ),
+      ).not.toBeInTheDocument();
     });
   });
 
@@ -1010,7 +1444,7 @@ describe("App", () => {
     render(<App />);
 
     await waitFor(() => {
-      expect(screen.getByText("Revise answer")).toBeInTheDocument();
+      expect(screen.getByText("Revise wording")).toBeInTheDocument();
     });
     const chatLog = screen.getByLabelText("Conversation history");
     Object.defineProperty(chatLog, "scrollHeight", {
@@ -1019,16 +1453,15 @@ describe("App", () => {
     });
     chatLog.scrollTop = 0;
 
-    fireEvent.change(
-      screen.getByPlaceholderText(
-        "Ask for a style revision such as shorter, clearer, or more formal.",
-      ),
-      {
-        target: {
-          value: "ok but remove the bullet points. just a flowing text",
-        },
-      },
+    fireEvent.click(screen.getByRole("button", { name: "Revise wording" }));
+    const revisionInput = await screen.findByPlaceholderText(
+      "Ask for a style revision such as shorter, clearer, or more formal.",
     );
+    fireEvent.change(revisionInput, {
+      target: {
+        value: "ok but remove the bullet points. just a flowing text",
+      },
+    });
     fireEvent.click(screen.getByText("Revise answer"));
 
     await waitFor(() => {
@@ -1168,7 +1601,7 @@ describe("App", () => {
     await waitFor(() => {
       expect(screen.getByText("Latest bulk-fill")).toBeInTheDocument();
       expect(screen.getAllByText("running")[0]).toBeInTheDocument();
-      expect(screen.getAllByText("needs_review")[0]).toBeInTheDocument();
+      expect(screen.getAllByText("needs review")[0]).toBeInTheDocument();
     });
   });
 
@@ -2509,6 +2942,7 @@ describe("App", () => {
       ).toBeInTheDocument();
     });
 
+    fireEvent.click(screen.getByRole("button", { name: "History" }));
     fireEvent.click(screen.getByRole("button", { name: /Version 1/ }));
 
     await waitFor(() => {
@@ -2852,9 +3286,9 @@ describe("App", () => {
 
     await waitFor(() => {
       expect(
-        screen.getByRole("button", {
+        screen.getAllByRole("button", {
           name: "Expand retrieved evidence panel",
-        }),
+        })[0],
       ).toBeInTheDocument();
       expect(
         screen.getByRole("button", {
@@ -2877,9 +3311,9 @@ describe("App", () => {
         screen.getByRole("heading", { name: "Row 3" }),
       ).toBeInTheDocument();
       expect(
-        screen.getByRole("button", {
+        screen.getAllByRole("button", {
           name: "Expand retrieved evidence panel",
-        }),
+        })[0],
       ).toBeInTheDocument();
       expect(
         screen.getByRole("button", {
@@ -2911,7 +3345,7 @@ describe("App", () => {
     );
   });
 
-  it("shows only Show in the collapsed sidebar rail", async () => {
+  it("keeps only the edge toggle in the collapsed sidebar rail", async () => {
     fetchMock.mockImplementation(
       async (input: RequestInfo | URL, init?: RequestInit) => {
         const url = String(input);
@@ -2968,6 +3402,7 @@ describe("App", () => {
     expect(
       screen.queryByRole("link", { name: "Help" }),
     ).not.toBeInTheDocument();
+    expect(screen.queryByText("Show")).not.toBeInTheDocument();
 
     fireEvent.click(
       screen.getByRole("button", {
@@ -3355,8 +3790,11 @@ describe("App", () => {
     const followUpUserMessage = within(chatLog).getByText(
       "Please make it shorter",
     );
-    const latestAssistantMessage =
-      within(chatLog).getByText("Later draft answer");
+    const latestAssistantMessage = within(chatLog)
+      .getAllByText("Later draft answer")
+      .find((node) =>
+        node.closest("article")?.hasAttribute("data-message-visual-state"),
+      );
 
     expect(initialUserMessage.closest("article")).toHaveAttribute(
       "data-message-visual-state",
@@ -3370,7 +3808,7 @@ describe("App", () => {
       "data-message-visual-state",
       "after-approved",
     );
-    expect(latestAssistantMessage.closest("article")).toHaveAttribute(
+    expect(latestAssistantMessage?.closest("article")).toHaveAttribute(
       "data-message-visual-state",
       "after-approved",
     );

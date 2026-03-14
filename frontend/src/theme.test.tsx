@@ -429,9 +429,15 @@ describe("theme support", () => {
     expect(
       within(chatLog).getByText("Approved answer draft").closest("article"),
     ).toHaveAttribute("data-message-visual-state", "approved");
-    expect(
-      within(chatLog).getByText("Updated answer draft").closest("article"),
-    ).toHaveAttribute("data-message-visual-state", "after-approved");
+    const updatedDraftMessage = within(chatLog)
+      .getAllByText("Updated answer draft")
+      .find((node) =>
+        node.closest("article")?.hasAttribute("data-message-visual-state"),
+      );
+    expect(updatedDraftMessage?.closest("article")).toHaveAttribute(
+      "data-message-visual-state",
+      "after-approved",
+    );
   });
 
   it("renders the same theme control on the help page", async () => {

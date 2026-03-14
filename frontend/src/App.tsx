@@ -1,5 +1,8 @@
 import {
+  type CSSProperties,
   FormEvent,
+  KeyboardEvent as ReactKeyboardEvent,
+  PointerEvent as ReactPointerEvent,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -31,11 +34,13 @@ import type {
   AnswerVersion,
   CaseDetail,
   CaseSummary,
+  ChatMessage,
   DevTableRowsResponse,
   DevTableSummary,
   DraftResponse,
   Evidence,
   QuestionnaireRow,
+  RetrievalSummary,
   SessionContext,
   ThreadDetail,
 } from "./types";
@@ -62,6 +67,34 @@ type RowFilter =
   | "skipped";
 type RowVisualState = "neutral" | "approved" | "approved-stale" | "failed";
 type ChatMessageVisualState = "neutral" | "approved" | "after-approved";
+type StatusChipTone = "neutral" | "accent" | "success" | "warning" | "danger";
+type EvidenceAuthorityKey =
+  | "current_case_facts"
+  | "current_case_pdf"
+  | "product_truth"
+  | "historical_exemplar";
+
+type EvidenceAuthorityMeta = {
+  key: EvidenceAuthorityKey;
+  label: string;
+  description: string;
+  order: number;
+};
+
+type EvidenceAuthorityGroup = {
+  meta: EvidenceAuthorityMeta;
+  items: Evidence[];
+};
+
+type EvidenceDetail = {
+  label: string;
+  value: string;
+};
+
+type HistoricalEvidenceSection = {
+  label: string;
+  value: string;
+};
 
 const emptyCaseState: CreateCaseState = {
   name: "",
@@ -69,6 +102,46 @@ const emptyCaseState: CreateCaseState = {
   pdf: null,
   questionnaire: null,
 };
+
+const EVIDENCE_AUTHORITY_META: Record<
+  EvidenceAuthorityKey,
+  EvidenceAuthorityMeta
+> = {
+  historical_exemplar: {
+    key: "historical_exemplar",
+    label: "Historical examples",
+    description:
+      "Approved past answers that help reviewers compare structure, phrasing, and delivery approach.",
+    order: 0,
+  },
+  current_case_facts: {
+    key: "current_case_facts",
+    label: "Current case facts",
+    description:
+      "Structured facts extracted from the active case profile. Use these as the primary grounding source for this case.",
+    order: 1,
+  },
+  product_truth: {
+    key: "product_truth",
+    label: "Product truth",
+    description:
+      "Approved vendor facts for product, integration, deployment, and security claims.",
+    order: 2,
+  },
+  current_case_pdf: {
+    key: "current_case_pdf",
+    label: "Source document excerpts",
+    description:
+      "Direct excerpts from the current client documents. Use these when the structured profile is not sufficient by itself.",
+    order: 3,
+  },
+};
+
+const DESKTOP_LAYOUT_BREAKPOINT = 1100;
+const EVIDENCE_PANEL_DEFAULT_WIDTH = 360;
+const EVIDENCE_PANEL_MIN_WIDTH = 320;
+const EVIDENCE_PANEL_MAX_WIDTH = 520;
+const EVIDENCE_PANEL_RESIZE_STEP = 24;
 
 function renderDevValue(value: unknown): string {
   if (value === null || value === undefined) {
@@ -82,6 +155,820 @@ function renderDevValue(value: unknown): string {
 
 function pluralize(count: number, singular: string, plural: string): string {
   return `${count} ${count === 1 ? singular : plural}`;
+}
+
+function humanizeStatus(
+  value: string | null | undefined,
+  fallback = "none",
+): string {
+  if (!value) {
+    return fallback;
+  }
+  return value.replaceAll("_", " ");
+}
+
+function clampNumber(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
+}
+
+function toSentenceCase(value: string): string {
+  const normalized = value.trim();
+  if (!normalized) {
+    return "";
+  }
+  return `${normalized.charAt(0).toUpperCase()}${normalized.slice(1)}`;
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function summarizeText(
+  value: string | null | undefined,
+  maxLength = 180,
+): string {
+  const normalized = value?.trim() ?? "";
+  if (!normalized) {
+    return "No context available.";
+  }
+  if (normalized.length <= maxLength) {
+    return normalized;
+  }
+  return `${normalized.slice(0, maxLength - 1).trimEnd()}…`;
+}
+
+function statusToneForReviewStatus(
+  status: string | null | undefined,
+): StatusChipTone {
+  switch (status) {
+    case "approved":
+      return "success";
+    case "needs_review":
+    case "running":
+      return "warning";
+    case "failed":
+    case "rejected":
+      return "danger";
+    case "not_started":
+    case "skipped":
+      return "neutral";
+    default:
+      return "accent";
+  }
+}
+
+function reviewStatusLabel(
+  status: string | null | undefined,
+  options: {
+    hasApprovedAnswer: boolean;
+  },
+): string {
+  if (status === "rejected") {
+    return options.hasApprovedAnswer ? "row rejected" : "rejected";
+  }
+  return humanizeStatus(status, "not set");
+}
+
+function evidencePanelMaxWidthForWorkspace(
+  workspaceWidth: number | null,
+): number {
+  if (workspaceWidth === null) {
+    return EVIDENCE_PANEL_MAX_WIDTH;
+  }
+  return clampNumber(
+    Math.floor(workspaceWidth * 0.42),
+    EVIDENCE_PANEL_MIN_WIDTH,
+    EVIDENCE_PANEL_MAX_WIDTH,
+  );
+}
+
+function statusToneForAttemptState(
+  state: QuestionnaireRow["latest_attempt_state"] | undefined,
+): StatusChipTone {
+  switch (state) {
+    case "answer_available":
+      return "success";
+    case "pending_no_answer":
+      return "warning";
+    case "failed_no_answer":
+      return "danger";
+    default:
+      return "neutral";
+  }
+}
+
+function statusToneForBulkFill(
+  status: string | null | undefined,
+): StatusChipTone {
+  switch (status) {
+    case "drafted":
+    case "completed":
+      return "success";
+    case "running":
+    case "queued":
+    case "needs_review":
+      return "warning";
+    case "failed":
+    case "cancelled":
+    case "orphaned":
+      return "danger";
+    default:
+      return "neutral";
+  }
+}
+
+function statusToneForSufficiency(
+  sufficiency: RetrievalSummary["sufficiency"] | "not_run" | undefined,
+): StatusChipTone {
+  switch (sufficiency) {
+    case "sufficient":
+      return "success";
+    case "weak":
+    case "degraded":
+      return "warning";
+    case "insufficient":
+      return "danger";
+    default:
+      return "neutral";
+  }
+}
+
+function evidenceAuthorityForItem(item: Evidence): EvidenceAuthorityMeta {
+  switch (item.source_kind) {
+    case "case_profile_item":
+      return EVIDENCE_AUTHORITY_META.current_case_facts;
+    case "pdf_chunk":
+    case "pdf_page":
+      return EVIDENCE_AUTHORITY_META.current_case_pdf;
+    case "product_truth_chunk":
+      return EVIDENCE_AUTHORITY_META.product_truth;
+    case "historical_qa_row":
+      return EVIDENCE_AUTHORITY_META.historical_exemplar;
+  }
+}
+
+function recommendedNextStep(
+  row: QuestionnaireRow | null,
+  thread: ThreadDetail | null,
+  hasGeneratedAnswer: boolean,
+  hasApprovedAnswer: boolean,
+): string {
+  if (!row) {
+    return "Select a row from the operational queue to inspect its drafting lineage.";
+  }
+  if (thread?.thread_state === "failed_no_answer") {
+    return "Inspect the failed attempt, then retry generation or fall back to an earlier answer version.";
+  }
+  if (!hasGeneratedAnswer) {
+    return "Generate the first grounded answer for this row.";
+  }
+  if (!hasApprovedAnswer) {
+    return "Review the latest draft, then approve it or reject it for follow-up.";
+  }
+  if (row.review_status === "approved") {
+    return "The approved answer is canonical for export until you explicitly move the approval pointer.";
+  }
+  return "Decide whether the selected version should replace the current approved pointer.";
+}
+
+function rowQueueAriaLabel(row: QuestionnaireRow): string {
+  const suffix = row.last_bulk_fill_status
+    ? `${row.last_bulk_fill_status} · attempt ${row.last_bulk_fill_attempt_number}`
+    : "no bulk fill";
+  return `Row ${row.source_row_number} ${row.question} ${row.review_status} ${suffix}`;
+}
+
+function rejectActionLabel(options: {
+  selectedVersionId: string | null;
+  approvedVersionId: string | null | undefined;
+  hasApprovedAnswer: boolean;
+}): string {
+  if (!options.selectedVersionId) {
+    return "Mark row rejected";
+  }
+  if (
+    options.approvedVersionId &&
+    options.selectedVersionId === options.approvedVersionId
+  ) {
+    return "Reject row and clear approved answer";
+  }
+  if (options.hasApprovedAnswer) {
+    return "Reject row, keep approved answer";
+  }
+  return "Mark row rejected";
+}
+
+function rejectActionHint(options: {
+  selectedVersionId: string | null;
+  approvedVersionId: string | null | undefined;
+  hasApprovedAnswer: boolean;
+}): string {
+  if (!options.selectedVersionId) {
+    return "Rejection is a row-level review state.";
+  }
+  if (
+    options.approvedVersionId &&
+    options.selectedVersionId === options.approvedVersionId
+  ) {
+    return "This will mark the row rejected and remove the approved pointer.";
+  }
+  if (options.hasApprovedAnswer) {
+    return "This marks the row rejected but keeps the approved answer pointer on the other version.";
+  }
+  return "This marks the row rejected. It does not delete answer history.";
+}
+
+function formatMetadataValue(value: unknown): string {
+  if (Array.isArray(value)) {
+    return value.map((item) => formatMetadataValue(item)).join(", ");
+  }
+  if (typeof value === "object" && value !== null) {
+    return JSON.stringify(value);
+  }
+  return String(value);
+}
+
+function formatEvidenceTitle(title: string): string {
+  const normalized = title.trim().replaceAll("_", " ");
+  return normalized ? toSentenceCase(normalized) : "Untitled evidence";
+}
+
+function humanizeIdentifier(value: string): string {
+  const normalized = value.trim().replace(/[_-]+/g, " ");
+  if (!normalized) {
+    return "";
+  }
+  return normalized
+    .split(/\s+/)
+    .map((part) =>
+      part ? `${part.charAt(0).toUpperCase()}${part.slice(1)}` : part,
+    )
+    .join(" ");
+}
+
+function evidenceTraceLabel(item: Evidence): string {
+  const provenance = isPlainRecord(item.metadata.provenance)
+    ? item.metadata.provenance
+    : null;
+  switch (item.source_kind) {
+    case "case_profile_item":
+      return "Structured case fact";
+    case "pdf_chunk":
+      return "Source document excerpt";
+    case "pdf_page":
+      return "Source document excerpt";
+    case "product_truth_chunk":
+      return "Product truth excerpt";
+    case "historical_qa_row":
+      if (provenance && typeof provenance.source_row_number === "number") {
+        return `Historical example · row ${provenance.source_row_number}`;
+      }
+      return "Historical example";
+  }
+}
+
+function evidenceDisplayTitle(item: Evidence): string {
+  const provenance = isPlainRecord(item.metadata.provenance)
+    ? item.metadata.provenance
+    : null;
+
+  if (item.source_kind === "historical_qa_row" && provenance) {
+    const clientLabel =
+      typeof provenance.client_slug === "string"
+        ? humanizeIdentifier(provenance.client_slug)
+        : "";
+    const rowNumber =
+      typeof provenance.source_row_number === "number"
+        ? provenance.source_row_number
+        : null;
+    if (clientLabel && rowNumber !== null) {
+      return `${clientLabel} · Row ${rowNumber}`;
+    }
+    if (clientLabel) {
+      return clientLabel;
+    }
+  }
+
+  if (
+    (item.source_kind === "pdf_chunk" || item.source_kind === "pdf_page") &&
+    provenance &&
+    typeof provenance.page_number === "number"
+  ) {
+    const chunkIndex =
+      typeof provenance.chunk_index === "number"
+        ? provenance.chunk_index
+        : null;
+    return chunkIndex !== null
+      ? `Page ${provenance.page_number}, chunk ${chunkIndex}`
+      : `Page ${provenance.page_number}`;
+  }
+
+  return formatEvidenceTitle(item.source_title);
+}
+
+function formatEvidenceExcerpt(item: Evidence): string {
+  if (item.source_kind !== "historical_qa_row") {
+    return item.excerpt;
+  }
+  return item.excerpt
+    .replace(/\n(?=Historical question:)/g, "\n\n")
+    .replace(/\n(?=Historical answer exemplar:)/g, "\n\n");
+}
+
+function parseHistoricalEvidenceExcerpt(
+  excerpt: string,
+): HistoricalEvidenceSection[] | null {
+  const match = excerpt.match(
+    /^Historical client context:\s*([\s\S]*?)\n+Historical question:\s*([\s\S]*?)\n+Historical answer exemplar:\s*([\s\S]*)$/,
+  );
+  if (!match) {
+    return null;
+  }
+  const [, context, question, answer] = match;
+  return [
+    {
+      label: "Historical client context",
+      value: context.trim(),
+    },
+    {
+      label: "Historical question",
+      value: question.trim(),
+    },
+    {
+      label: "Historical answer exemplar",
+      value: answer.trim(),
+    },
+  ];
+}
+
+function evidenceDetails(item: Evidence): EvidenceDetail[] {
+  const details: EvidenceDetail[] = [];
+  const metadata = item.metadata;
+  const provenance = isPlainRecord(metadata.provenance)
+    ? metadata.provenance
+    : null;
+
+  if (item.source_kind === "case_profile_item") {
+    if (typeof metadata.confidence === "string") {
+      details.push({
+        label: "Confidence",
+        value: toSentenceCase(humanizeStatus(metadata.confidence)),
+      });
+    }
+    if (Array.isArray(metadata.citations) && metadata.citations.length) {
+      details.push({
+        label: "Citations",
+        value: metadata.citations.map((citation) => String(citation)).join(", "),
+      });
+    }
+  }
+
+  if (item.source_kind === "pdf_chunk" || item.source_kind === "pdf_page") {
+    const pageNumber =
+      provenance && typeof provenance.page_number === "number"
+        ? provenance.page_number
+        : null;
+    const chunkIndex =
+      provenance && typeof provenance.chunk_index === "number"
+        ? provenance.chunk_index
+        : null;
+    if (pageNumber !== null) {
+      details.push({
+        label: "Location",
+        value:
+          chunkIndex !== null
+            ? `Page ${pageNumber}, chunk ${chunkIndex}`
+            : `Page ${pageNumber}`,
+      });
+    }
+    if (provenance && typeof provenance.chunking_version === "string") {
+      details.push({
+        label: "Chunking",
+        value: provenance.chunking_version,
+      });
+    }
+  }
+
+  if (item.source_kind === "product_truth_chunk") {
+    if (typeof metadata.language === "string") {
+      details.push({
+        label: "Language",
+        value: String(metadata.language).toUpperCase(),
+      });
+    }
+    if (provenance && typeof provenance.source_section === "string") {
+      details.push({
+        label: "Section",
+        value: toSentenceCase(
+          provenance.source_section.replaceAll("_", " "),
+        ),
+      });
+    }
+    if (provenance && typeof provenance.version === "string") {
+      details.push({
+        label: "Version",
+        value: provenance.version,
+      });
+    }
+  }
+
+  if (item.source_kind === "historical_qa_row") {
+    if (provenance && typeof provenance.workbook_file_name === "string") {
+      details.push({
+        label: "Workbook",
+        value: provenance.workbook_file_name,
+      });
+    }
+    if (provenance && typeof provenance.client_name === "string") {
+      details.push({
+        label: "Client",
+        value: provenance.client_name,
+      });
+    }
+  }
+
+  if (details.length) {
+    return details;
+  }
+
+  return Object.entries(metadata)
+    .filter(
+      ([key, value]) =>
+        !["component_scores", "matched_features", "provenance"].includes(key) &&
+        value !== null &&
+        value !== undefined &&
+        value !== "",
+    )
+    .slice(0, 2)
+    .map(([key, value]) => ({
+      label: toSentenceCase(key.replaceAll("_", " ")),
+      value: formatMetadataValue(value),
+    }));
+}
+
+function generationPathLabel(path: string | null | undefined): string {
+  switch (path) {
+    case "render_only_reuse_plan":
+      return "wording revision";
+    case "two_stage_plan_render":
+      return "grounded draft";
+    default:
+      return humanizeStatus(path, "draft");
+  }
+}
+
+function retrievalActionLabel(action: string | null | undefined): string {
+  switch (action) {
+    case "reuse_retrieval":
+    case "reuse_previous_snapshot":
+      return "evidence reused";
+    case "refresh_retrieval":
+      return "evidence refreshed";
+    default:
+      return humanizeStatus(action, "retrieval");
+  }
+}
+
+function revisionModeLabel(mode: string | null | undefined): string {
+  switch (mode) {
+    case "style_only":
+      return "wording-only revision";
+    case "content_change":
+      return "content refresh";
+    case "initial_draft":
+      return "first draft";
+    default:
+      return humanizeStatus(mode, "drafting mode");
+  }
+}
+
+function queueSummaryTooltip(
+  kind: "approved" | "needs_review" | "failed" | "not_started",
+  count: number,
+): string {
+  if (count === 0) {
+    switch (kind) {
+      case "approved":
+        return "No rows currently have an approved answer selected for sign-off and approved-only export.";
+      case "needs_review":
+        return "No rows are currently waiting for reviewer approval or rejection.";
+      case "failed":
+        return "No rows are currently sitting in a failed state.";
+      case "not_started":
+        return "Every row in scope has already had some drafting activity.";
+    }
+  }
+  const countLabel = pluralize(count, "row", "rows");
+  const verb = count === 1 ? "has" : "have";
+  switch (kind) {
+    case "approved":
+      return `${countLabel} currently ${verb} an approved answer selected for sign-off and approved-only export.`;
+    case "needs_review":
+      return `${countLabel} ${verb} draft content ready, but a reviewer still needs to approve or reject ${count === 1 ? "it" : "them"}.`;
+    case "failed":
+      return `${countLabel} ${count === 1 ? "ended" : "ended"} without a usable draft and ${count === 1 ? "needs" : "need"} retry or manual follow-up.`;
+    case "not_started":
+      return `${countLabel} ${count === 1 ? "has" : "have"} not been drafted yet in this case.`;
+  }
+}
+
+function reviewStatusTooltip(
+  status: string | null | undefined,
+  options: {
+    hasApprovedAnswer: boolean;
+  },
+): string {
+  switch (status) {
+    case "approved":
+      return "This row has an approved answer selected for sign-off and export.";
+    case "needs_review":
+      return "This row has a draft answer available, but it still needs a reviewer decision.";
+    case "running":
+      return "This row is currently being drafted or retried.";
+    case "failed":
+      return "The latest drafting attempt for this row did not produce a usable answer.";
+    case "rejected":
+      return options.hasApprovedAnswer
+        ? "This row is marked rejected for follow-up, but an older approved answer still exists."
+        : "This row was reviewed and rejected, so it is not approved for export.";
+    case "not_started":
+      return "No drafting attempt has been started for this row yet.";
+    case "skipped":
+      return "This row was intentionally skipped in the current workflow.";
+    default:
+      return "This chip shows the current review state of the row.";
+  }
+}
+
+function attemptStateTooltip(
+  state: QuestionnaireRow["latest_attempt_state"] | undefined,
+): string {
+  switch (state) {
+    case "answer_available":
+      return "The latest drafting attempt produced a draft answer that you can review.";
+    case "pending_no_answer":
+      return "A drafting attempt exists for this row, but it has not produced a usable answer yet.";
+    case "failed_no_answer":
+      return "The latest drafting attempt ended without a usable answer.";
+    default:
+      return "No drafting attempt has been recorded for this row yet.";
+  }
+}
+
+function retrievalSufficiencyTooltip(
+  sufficiency: RetrievalSummary["sufficiency"] | "not_run" | undefined,
+): string {
+  switch (sufficiency) {
+    case "sufficient":
+      return "The evidence set looks strong enough to support a grounded draft.";
+    case "weak":
+      return "The system found some useful evidence, but reviewers should check the answer closely.";
+    case "degraded":
+      return "The evidence set is thinner or less direct than normal, so confidence is lower.";
+    case "insufficient":
+      return "The system could not find enough reliable evidence to support a strong draft.";
+    default:
+      return "Evidence has not been collected for this row yet.";
+  }
+}
+
+function bulkFillStatusTooltip(status: string | null | undefined): string {
+  switch (status) {
+    case "queued":
+      return "This bulk-fill request is waiting to start.";
+    case "running":
+      return "The system is currently drafting rows for this case in the background.";
+    case "drafted":
+      return "The run created draft answers. They still need human review and approval before export.";
+    case "needs_review":
+      return "Bulk fill produced draft answers that now need reviewer sign-off.";
+    case "completed":
+      return "The latest bulk-fill run finished its drafting work.";
+    case "completed_with_failures":
+      return "The run finished, but some rows still failed and need follow-up.";
+    case "failed":
+      return "The bulk-fill run stopped before it could finish the case. Review the failed rows, then retry or resume as needed.";
+    case "cancel_requested":
+      return "Stop has been requested. The run may still finish the row it is working on.";
+    case "cancelled":
+      return "The bulk-fill run was stopped before completion.";
+    case "orphaned":
+      return "The run lost its worker before finishing and needs follow-up.";
+    default:
+      return "This chip shows the latest bulk-fill state for the case or row.";
+  }
+}
+
+function exportApprovedTooltip(): string {
+  return "Download the questionnaire using only rows whose approved answer has been explicitly signed off. Unapproved drafts are ignored.";
+}
+
+function exportLatestTooltip(): string {
+  return "Download the questionnaire using the newest available answer on each row, even if some rows are still unapproved.";
+}
+
+function launchBulkFillTooltip(): string {
+  return "Start a case-wide drafting run that creates row drafts from the current evidence. Review and approval still stay with a human reviewer.";
+}
+
+function rowBackgroundTooltip(): string {
+  return "This is the source background text attached to the selected questionnaire row. It explains the client situation and scope that should shape the answer.";
+}
+
+function bulkFillExecutionModeTooltip(mode: string | null | undefined): string {
+  if (!mode) {
+    return "No processing mode has been recorded for this bulk-fill run yet.";
+  }
+  return `This says how the bulk-fill run was started and processed. It affects job handling, not answer wording. Current mode: ${humanizeStatus(mode)}.`;
+}
+
+function bulkFillRunnerTooltip(runnerId: string | null | undefined): string {
+  if (!runnerId) {
+    return "No worker has claimed this bulk-fill request yet.";
+  }
+  return "This is the internal worker label for the process currently handling or last handling the bulk-fill request.";
+}
+
+function profileMissingTooltip(): string {
+  return "The structured case profile has not been created yet, so the main case-facts layer is still missing.";
+}
+
+function approvalStateTooltip(options: {
+  hasApprovedAnswer: boolean;
+  selectedAnswerIsApproved: boolean;
+}): string {
+  if (!options.hasApprovedAnswer) {
+    return "This row does not have an approved answer yet.";
+  }
+  if (options.selectedAnswerIsApproved) {
+    return "The version on screen is already the approved answer for this row.";
+  }
+  return "A different version is currently approved. The row keeps that approved answer until you move the approval pointer.";
+}
+
+function rowBulkFillAttemptTooltip(
+  status: string | null | undefined,
+  attemptNumber: number | null | undefined,
+): string {
+  if (!status) {
+    return "Bulk fill has not touched this row yet.";
+  }
+  const attemptLabel =
+    attemptNumber !== null && attemptNumber !== undefined
+      ? ` on attempt ${attemptNumber}`
+      : "";
+  return `Bulk fill last touched this row${attemptLabel} and left it in ${humanizeStatus(status)} state.`;
+}
+
+function generationPathTooltip(path: string | null | undefined): string {
+  switch (path) {
+    case "render_only_reuse_plan":
+      return "This version is a wording revision of an existing answer.";
+    case "two_stage_plan_render":
+      return "This version was produced as a full grounded draft from the current evidence set.";
+    default:
+      return "This shows what kind of drafting path created this answer version.";
+  }
+}
+
+function retrievalActionTooltip(action: string | null | undefined): string {
+  switch (action) {
+    case "reuse_retrieval":
+    case "reuse_previous_snapshot":
+      return "The system reused the earlier evidence set because the request was treated as a wording change.";
+    case "refresh_retrieval":
+      return "The system collected a fresh evidence set because the content needed to be drafted or materially changed.";
+    default:
+      return "This says whether the evidence set was reused or freshly collected for the current draft.";
+  }
+}
+
+function revisionModeTooltip(mode: string | null | undefined): string {
+  switch (mode) {
+    case "style_only":
+      return "This draft keeps the same substance and focuses on wording changes.";
+    case "content_change":
+      return "This draft was treated as a content change, so evidence may have been refreshed.";
+    case "initial_draft":
+      return "This is the first drafting pass for the selected row.";
+    default:
+      return "This says what kind of drafting action produced the current answer.";
+  }
+}
+
+function broadenedTooltip(): string {
+  return "The search had to cast a wider net than normal to find enough usable evidence.";
+}
+
+function degradedTooltip(): string {
+  return "The evidence set was built under weaker conditions than normal, so reviewers should check it more carefully.";
+}
+
+function answerVersionTooltip(versionNumber: number): string {
+  return `This message is linked to answer version ${versionNumber} in the row's revision history.`;
+}
+
+function approvedPointerTooltip(): string {
+  return "This version is the one currently selected as the approved answer for sign-off and export.";
+}
+
+function canonicalTooltip(): string {
+  return "This approved answer is the version the system will use for approved-only export until a reviewer changes it.";
+}
+
+function relevanceTooltip(score: number): string {
+  return `This score shows how directly the evidence matched the selected row. Higher values mean the system considered it more useful for this draft. Current score: ${score.toFixed(3)}.`;
+}
+
+function timelineEntryTitle(
+  item: ChatMessage,
+  assistantIndex: number,
+  userIndex: number,
+): string {
+  if (item.role === "user") {
+    return userIndex === 0 ? "Draft request" : "Revision request";
+  }
+  if (item.role === "assistant") {
+    return assistantIndex === 0 ? "Generated draft" : "Revised draft";
+  }
+  return humanizeStatus(item.role, "timeline event");
+}
+
+function timelineEntryEyebrow(item: ChatMessage): string {
+  if (item.role === "assistant") {
+    return "Draft output";
+  }
+  if (item.role === "user") {
+    return "Reviewer instruction";
+  }
+  return humanizeStatus(item.role, "event");
+}
+
+function StatusChip({
+  label,
+  tone,
+  muted = false,
+  tooltip,
+}: {
+  label: string;
+  tone: StatusChipTone;
+  muted?: boolean;
+  tooltip: string;
+}) {
+  return (
+    <span
+      className={muted ? "status-chip muted" : "status-chip"}
+      data-tone={tone}
+      title={tooltip}
+      aria-description={tooltip}
+    >
+      <span className="status-chip-indicator" aria-hidden="true" />
+      {label}
+    </span>
+  );
+}
+
+function MetaBadge({ label, tooltip }: { label: string; tooltip: string }) {
+  return (
+    <span className="meta-badge" title={tooltip} aria-description={tooltip}>
+      {label}
+    </span>
+  );
+}
+
+function SidebarEdgeToggleIcon({
+  collapsed,
+  side = "left",
+}: {
+  collapsed: boolean;
+  side?: "left" | "right";
+}) {
+  const chevronLeft = "M10 3.5 5.5 8 10 12.5";
+  const chevronRight = "M6 3.5 10.5 8 6 12.5";
+  return (
+    <svg
+      aria-hidden="true"
+      viewBox="0 0 16 16"
+      className="sidebar-edge-toggle-icon"
+    >
+      <path
+        d={
+          side === "left"
+            ? collapsed
+              ? chevronRight
+              : chevronLeft
+            : collapsed
+              ? chevronLeft
+              : chevronRight
+        }
+        fill="none"
+        stroke="currentColor"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        strokeWidth="1.6"
+      />
+    </svg>
+  );
 }
 
 function latestAttemptThreadId(
@@ -180,15 +1067,35 @@ function App() {
   const [rowFilter, setRowFilter] = useState<RowFilter>("all");
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [isEvidenceCollapsed, setIsEvidenceCollapsed] = useState(false);
+  const [isCaseFormVisible, setIsCaseFormVisible] = useState(false);
+  const [isCaseProfileExpanded, setIsCaseProfileExpanded] = useState(false);
   const [isContextExpanded, setIsContextExpanded] = useState(false);
+  const [reviewViewMode, setReviewViewMode] = useState<
+    "draft" | "compare" | "history"
+  >("draft");
+  const [draftActionMode, setDraftActionMode] = useState<
+    "revise" | "regenerate" | null
+  >(null);
+  const [expandedEvidenceIds, setExpandedEvidenceIds] = useState<string[]>([]);
+  const [evidencePanelWidth, setEvidencePanelWidth] = useState(
+    EVIDENCE_PANEL_DEFAULT_WIDTH,
+  );
+  const [workspaceWidth, setWorkspaceWidth] = useState<number | null>(null);
   const [chatViewportHeight, setChatViewportHeight] = useState<number | null>(
     null,
   );
+  const [isEvidenceResizing, setIsEvidenceResizing] = useState(false);
   const activeViewMode: ViewMode = devPanelsEnabled ? viewMode : "workspace";
   const workspaceLoadIdRef = useRef(0);
+  const workspaceRef = useRef<HTMLElement | null>(null);
   const answerPanelRef = useRef<HTMLElement | null>(null);
   const chatLogRef = useRef<HTMLDivElement | null>(null);
   const composerRef = useRef<HTMLDivElement | null>(null);
+  const evidenceResizeStateRef = useRef<{
+    startX: number;
+    startWidth: number;
+  } | null>(null);
+  const evidenceResizeCleanupRef = useRef<(() => void) | null>(null);
 
   const selectedAnswerVersion = useMemo(() => {
     if (!selectedAnswerVersionId) {
@@ -205,15 +1112,10 @@ function App() {
     return selectedAnswerVersion ?? threadState?.answer_version ?? null;
   }, [selectedAnswerVersion, threadState]);
 
-  const groupedEvidence = (threadState?.evidence ?? []).reduce<
-    Record<string, Evidence[]>
-  >((accumulator, item) => {
-    const key = item.source_label;
-    const current = accumulator[key] ?? [];
-    current.push(item);
-    accumulator[key] = current;
-    return accumulator;
-  }, {});
+  const answerVersionsById = useMemo(
+    () => new Map(answerVersions.map((version) => [version.id, version])),
+    [answerVersions],
+  );
 
   const approvedAnswerVersion = useMemo(() => {
     if (!selectedRow?.approved_answer_version_id) {
@@ -233,9 +1135,6 @@ function App() {
   const hasGeneratedAnswer = selectedAnswerVersion !== null;
   const latestChatMessageId =
     threadState?.messages[threadState.messages.length - 1]?.id ?? null;
-  const lastBulkFillAttemptLabel = selectedRow?.last_bulk_fill_status
-    ? `${selectedRow.last_bulk_fill_status} · attempt ${selectedRow.last_bulk_fill_attempt_number}`
-    : "No bulk-fill attempt recorded.";
   const isChatFocusMode = isSidebarCollapsed && isEvidenceCollapsed;
   const hasLongContext = (selectedRow?.context.length ?? 0) > 220;
   const approvedMessageIndex = useMemo(() => {
@@ -254,6 +1153,7 @@ function App() {
     selectedCase?.questionnaire_rows.filter((row) =>
       rowFilter === "all" ? true : row.review_status === rowFilter,
     ) ?? [];
+  const caseFormVisible = !selectedCase || isCaseFormVisible;
   const latestBulkFill = selectedCase?.latest_bulk_fill ?? null;
   const bulkFillImpact = useMemo(() => {
     if (!selectedCase) {
@@ -282,6 +1182,91 @@ function App() {
     }
     return { approved, overwrite, untouched };
   }, [selectedCase]);
+  const queueCounts = useMemo(() => {
+    if (!selectedCase) {
+      return null;
+    }
+    return selectedCase.questionnaire_rows.reduce(
+      (accumulator, row) => {
+        accumulator.total += 1;
+        if (row.review_status === "approved") {
+          accumulator.approved += 1;
+        }
+        if (row.review_status === "needs_review") {
+          accumulator.needsReview += 1;
+        }
+        if (row.review_status === "failed") {
+          accumulator.failed += 1;
+        }
+        if (row.review_status === "not_started") {
+          accumulator.notStarted += 1;
+        }
+        if (
+          row.latest_attempt_state === "answer_available" ||
+          row.current_answer.trim().length > 0
+        ) {
+          accumulator.answerAvailable += 1;
+        }
+        return accumulator;
+      },
+      {
+        total: 0,
+        approved: 0,
+        needsReview: 0,
+        failed: 0,
+        notStarted: 0,
+        answerAvailable: 0,
+      },
+    );
+  }, [selectedCase]);
+  const retrievalSufficiency =
+    threadState?.retrieval?.sufficiency ?? ("not_run" as const);
+  const hasApprovedAnswer =
+    !!selectedRow?.approved_answer_version_id ||
+    !!selectedRow?.approved_answer_text;
+  const nextStepSummary = recommendedNextStep(
+    selectedRow,
+    threadState,
+    hasGeneratedAnswer,
+    hasApprovedAnswer,
+  );
+  const evidenceAuthorityGroups = useMemo(() => {
+    const groups = new Map<EvidenceAuthorityKey, EvidenceAuthorityGroup>();
+    for (const item of threadState?.evidence ?? []) {
+      const meta = evidenceAuthorityForItem(item);
+      const currentGroup = groups.get(meta.key) ?? { meta, items: [] };
+      currentGroup.items.push(item);
+      groups.set(meta.key, currentGroup);
+    }
+    return [...groups.values()].sort(
+      (left, right) => left.meta.order - right.meta.order,
+    );
+  }, [threadState?.evidence]);
+  const selectedAnswerIsApproved =
+    !!selectedAnswerVersion &&
+    selectedAnswerVersion.id === selectedRow?.approved_answer_version_id;
+  const evidencePanelMaxWidth = useMemo(
+    () => evidencePanelMaxWidthForWorkspace(workspaceWidth),
+    [workspaceWidth],
+  );
+  const effectiveEvidencePanelWidth = useMemo(
+    () =>
+      clampNumber(
+        evidencePanelWidth,
+        EVIDENCE_PANEL_MIN_WIDTH,
+        evidencePanelMaxWidth,
+      ),
+    [evidencePanelMaxWidth, evidencePanelWidth],
+  );
+  const workspaceStyle = useMemo<CSSProperties | undefined>(
+    () =>
+      activeViewMode === "workspace"
+        ? ({
+            "--workspace-right-column": `${effectiveEvidencePanelWidth}px`,
+          } as CSSProperties)
+        : undefined,
+    [activeViewMode, effectiveEvidencePanelWidth],
+  );
 
   const clearRowWorkspace = useCallback((row: QuestionnaireRow | null) => {
     workspaceLoadIdRef.current += 1;
@@ -370,6 +1355,7 @@ function App() {
         }
         setSession(sessionContext);
         setCases(caseList);
+        setIsCaseFormVisible(caseList.length === 0);
         setStatus(
           caseList.length
             ? "Select a case to inspect its rows and chats."
@@ -521,14 +1507,136 @@ function App() {
     setIsContextExpanded(false);
   }, [selectedRow?.id]);
 
+  useEffect(() => {
+    setDraftActionMode(null);
+    setExpandedEvidenceIds([]);
+    setReviewViewMode("draft");
+  }, [selectedRow?.id]);
+
+  useEffect(() => {
+    setEvidencePanelWidth((current) =>
+      clampNumber(current, EVIDENCE_PANEL_MIN_WIDTH, evidencePanelMaxWidth),
+    );
+  }, [evidencePanelMaxWidth]);
+
+  const stopEvidenceResize = useCallback(() => {
+    evidenceResizeCleanupRef.current?.();
+    evidenceResizeCleanupRef.current = null;
+    evidenceResizeStateRef.current = null;
+    setIsEvidenceResizing(false);
+    document.body.style.removeProperty("cursor");
+    document.body.style.removeProperty("user-select");
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      stopEvidenceResize();
+    };
+  }, [stopEvidenceResize]);
+
+  useEffect(() => {
+    if (isEvidenceCollapsed) {
+      stopEvidenceResize();
+    }
+  }, [isEvidenceCollapsed, stopEvidenceResize]);
+
+  const handleEvidenceResizeStart = useCallback(
+    (event: ReactPointerEvent<HTMLDivElement>) => {
+      if (
+        event.button !== 0 ||
+        isEvidenceCollapsed ||
+        window.innerWidth <= DESKTOP_LAYOUT_BREAKPOINT
+      ) {
+        return;
+      }
+      const handlePointerMove = (moveEvent: PointerEvent) => {
+        const resizeState = evidenceResizeStateRef.current;
+        if (!resizeState) {
+          return;
+        }
+        setEvidencePanelWidth(
+          clampNumber(
+            resizeState.startWidth + resizeState.startX - moveEvent.clientX,
+            EVIDENCE_PANEL_MIN_WIDTH,
+            evidencePanelMaxWidth,
+          ),
+        );
+      };
+      const handlePointerEnd = () => {
+        stopEvidenceResize();
+      };
+      evidenceResizeCleanupRef.current?.();
+      evidenceResizeStateRef.current = {
+        startX: event.clientX,
+        startWidth: effectiveEvidencePanelWidth,
+      };
+      evidenceResizeCleanupRef.current = () => {
+        window.removeEventListener("pointermove", handlePointerMove);
+        window.removeEventListener("pointerup", handlePointerEnd);
+        window.removeEventListener("pointercancel", handlePointerEnd);
+      };
+      window.addEventListener("pointermove", handlePointerMove);
+      window.addEventListener("pointerup", handlePointerEnd);
+      window.addEventListener("pointercancel", handlePointerEnd);
+      document.body.style.cursor = "col-resize";
+      document.body.style.userSelect = "none";
+      setIsEvidenceResizing(true);
+      event.preventDefault();
+    },
+    [
+      effectiveEvidencePanelWidth,
+      evidencePanelMaxWidth,
+      isEvidenceCollapsed,
+      stopEvidenceResize,
+    ],
+  );
+
+  const handleEvidenceResizeKeyDown = useCallback(
+    (event: ReactKeyboardEvent<HTMLDivElement>) => {
+      if (window.innerWidth <= DESKTOP_LAYOUT_BREAKPOINT) {
+        return;
+      }
+      switch (event.key) {
+        case "ArrowLeft":
+          setEvidencePanelWidth((current) =>
+            clampNumber(
+              current + EVIDENCE_PANEL_RESIZE_STEP,
+              EVIDENCE_PANEL_MIN_WIDTH,
+              evidencePanelMaxWidth,
+            ),
+          );
+          event.preventDefault();
+          break;
+        case "ArrowRight":
+          setEvidencePanelWidth((current) =>
+            clampNumber(
+              current - EVIDENCE_PANEL_RESIZE_STEP,
+              EVIDENCE_PANEL_MIN_WIDTH,
+              evidencePanelMaxWidth,
+            ),
+          );
+          event.preventDefault();
+          break;
+        case "Home":
+          setEvidencePanelWidth(EVIDENCE_PANEL_MIN_WIDTH);
+          event.preventDefault();
+          break;
+        case "End":
+          setEvidencePanelWidth(evidencePanelMaxWidth);
+          event.preventDefault();
+          break;
+      }
+    },
+    [evidencePanelMaxWidth],
+  );
+
   useLayoutEffect(() => {
     function updateChatViewportHeight() {
       if (
         activeViewMode !== "workspace" ||
         !answerPanelRef.current ||
         !chatLogRef.current ||
-        !composerRef.current ||
-        window.innerWidth <= 1100
+        window.innerWidth <= DESKTOP_LAYOUT_BREAKPOINT
       ) {
         setChatViewportHeight(null);
         return;
@@ -538,7 +1646,8 @@ function App() {
         24,
       );
       const chatTop = panelTop + chatLogRef.current.offsetTop;
-      const composerHeight = composerRef.current.getBoundingClientRect().height;
+      const composerHeight =
+        composerRef.current?.getBoundingClientRect().height ?? 0;
       const gapBetweenChatAndComposer = 6;
       const bottomClearance = 0;
       const availableHeight = Math.floor(
@@ -559,6 +1668,7 @@ function App() {
     };
   }, [
     activeViewMode,
+    effectiveEvidencePanelWidth,
     hasGeneratedAnswer,
     isContextExpanded,
     isEvidenceCollapsed,
@@ -567,9 +1677,34 @@ function App() {
     selectedRow?.id,
   ]);
 
+  useLayoutEffect(() => {
+    function updateWorkspaceWidth() {
+      if (
+        activeViewMode !== "workspace" ||
+        !workspaceRef.current ||
+        window.innerWidth <= DESKTOP_LAYOUT_BREAKPOINT
+      ) {
+        setWorkspaceWidth(null);
+        return;
+      }
+      const measuredWidth = Math.floor(
+        workspaceRef.current.getBoundingClientRect().width,
+      );
+      setWorkspaceWidth(measuredWidth > 0 ? measuredWidth : window.innerWidth);
+    }
+
+    const frameId = window.requestAnimationFrame(updateWorkspaceWidth);
+    window.addEventListener("resize", updateWorkspaceWidth);
+    return () => {
+      window.cancelAnimationFrame(frameId);
+      window.removeEventListener("resize", updateWorkspaceWidth);
+    };
+  }, [activeViewMode, isEvidenceCollapsed, isSidebarCollapsed]);
+
   async function selectCase(caseId: string) {
     try {
       setError(null);
+      setIsCaseFormVisible(false);
       await refreshSelectedCase(caseId, selectedRow?.id ?? null);
     } catch (caught) {
       setError((caught as Error).message);
@@ -627,6 +1762,7 @@ function App() {
         questionnaire: formState.questionnaire,
       });
       setFormState(emptyCaseState);
+      setIsCaseFormVisible(false);
       const refreshedCases = await listCases();
       setCases(refreshedCases);
       setSelectedCase(created);
@@ -668,6 +1804,7 @@ function App() {
       setThreadState(threadDetailFromDraftResponse(result));
       setSelectedAnswerVersionId(result.answer_version.id);
       setMessage("");
+      setDraftActionMode(null);
       setStatus("Answer revised.");
       await refreshSelectedCase(selectedCase.id, selectedRow.id);
     } catch (caught) {
@@ -866,6 +2003,7 @@ function App() {
       );
       setThreadState(threadDetailFromDraftResponse(result));
       setSelectedAnswerVersionId(result.answer_version.id);
+      setDraftActionMode(null);
       setStatus(
         inspectedAnswerVersion ? "Answer regenerated." : "Answer generated.",
       );
@@ -911,22 +2049,26 @@ function App() {
       }
     >
       <aside className={isSidebarCollapsed ? "sidebar collapsed" : "sidebar"}>
+        <button
+          type="button"
+          className="sidebar-edge-toggle"
+          onClick={() => setIsSidebarCollapsed((current) => !current)}
+          aria-label={
+            isSidebarCollapsed
+              ? "Expand RfX RAG Expert sidebar"
+              : "Collapse RfX RAG Expert sidebar"
+          }
+        >
+          <SidebarEdgeToggleIcon collapsed={isSidebarCollapsed} />
+        </button>
         {isSidebarCollapsed ? (
           <div className="panel-collapsed-shell">
-            <button
-              type="button"
-              className="panel-toggle sidebar-toggle"
-              onClick={() => setIsSidebarCollapsed(false)}
-              aria-label="Expand RfX RAG Expert sidebar"
-            >
-              Show
-            </button>
             <span className="collapsed-rail-label">RfX RAG Expert</span>
           </div>
         ) : (
           <>
             <div className="sidebar-header">
-              <div>
+              <div className="sidebar-header-main">
                 <p className="eyebrow">RfX RAG Expert</p>
                 <h1>Case workspace</h1>
                 <p>
@@ -934,8 +2076,6 @@ function App() {
                     ? `${session.user_name} in ${session.tenant_name}`
                     : status}
                 </p>
-              </div>
-              <div className="sidebar-header-controls">
                 <div className="sidebar-header-actions">
                   <a
                     className="panel-toggle sidebar-toggle"
@@ -943,15 +2083,9 @@ function App() {
                   >
                     Help
                   </a>
-                  <button
-                    type="button"
-                    className="panel-toggle sidebar-toggle"
-                    onClick={() => setIsSidebarCollapsed(true)}
-                    aria-label="Collapse RfX RAG Expert sidebar"
-                  >
-                    Hide
-                  </button>
                 </div>
+              </div>
+              <div className="sidebar-header-controls">
                 <ThemeToggle
                   className="sidebar-theme-toggle"
                   preference={preference}
@@ -993,77 +2127,25 @@ function App() {
               </section>
             ) : null}
 
-            <form className="case-form" onSubmit={handleCreateCase}>
-              <h2>Create case</h2>
-              <label>
-                <span>Case name</span>
-                <input
-                  value={formState.name}
-                  onChange={(event) =>
-                    setFormState((current) => ({
-                      ...current,
-                      name: event.target.value,
-                    }))
-                  }
-                  required
-                />
-              </label>
-              <label>
-                <span>Client name</span>
-                <input
-                  value={formState.clientName}
-                  onChange={(event) =>
-                    setFormState((current) => ({
-                      ...current,
-                      clientName: event.target.value,
-                    }))
-                  }
-                />
-              </label>
-              <label>
-                <span>Client PDF</span>
-                <input
-                  type="file"
-                  accept=".pdf"
-                  onChange={(event) =>
-                    setFormState((current) => ({
-                      ...current,
-                      pdf: event.target.files?.[0] ?? null,
-                    }))
-                  }
-                  required
-                />
-                {formState.pdf ? (
-                  <span className="file-status">
-                    PDF loaded: {formState.pdf.name}
-                  </span>
-                ) : null}
-              </label>
-              <label>
-                <span>Questionnaire XLSX</span>
-                <input
-                  type="file"
-                  accept=".xlsx"
-                  onChange={(event) =>
-                    setFormState((current) => ({
-                      ...current,
-                      questionnaire: event.target.files?.[0] ?? null,
-                    }))
-                  }
-                />
-                {formState.questionnaire ? (
-                  <span className="file-status">
-                    Questionnaire loaded: {formState.questionnaire.name}
-                  </span>
-                ) : null}
-              </label>
-              <button type="submit">Create case</button>
-            </form>
-
             <div className="case-list">
               <div className="list-header">
-                <h2>Past cases</h2>
-                <span>{cases.length}</span>
+                <div>
+                  <h2>Past cases</h2>
+                  <p className="status-line">
+                    Keep the active review workspace scoped to one case at a
+                    time.
+                  </p>
+                </div>
+                <div className="sidebar-list-actions">
+                  <span>{cases.length}</span>
+                  <button
+                    type="button"
+                    className="panel-toggle"
+                    onClick={() => setIsCaseFormVisible((current) => !current)}
+                  >
+                    {caseFormVisible ? "Hide new case" : "New case"}
+                  </button>
+                </div>
               </div>
               {cases.map((item) => (
                 <button
@@ -1084,211 +2166,409 @@ function App() {
                 </button>
               ))}
             </div>
+
+            {caseFormVisible ? (
+              <form className="case-form" onSubmit={handleCreateCase}>
+                <div className="list-header">
+                  <div>
+                    <h2>Create case</h2>
+                    <p className="status-line">
+                      Start a separate case when you need a fresh evidence desk
+                      and row queue.
+                    </p>
+                  </div>
+                </div>
+                <label>
+                  <span>Case name</span>
+                  <input
+                    value={formState.name}
+                    onChange={(event) =>
+                      setFormState((current) => ({
+                        ...current,
+                        name: event.target.value,
+                      }))
+                    }
+                    required
+                  />
+                </label>
+                <label>
+                  <span>Client name</span>
+                  <input
+                    value={formState.clientName}
+                    onChange={(event) =>
+                      setFormState((current) => ({
+                        ...current,
+                        clientName: event.target.value,
+                      }))
+                    }
+                  />
+                </label>
+                <label>
+                  <span>Client PDF</span>
+                  <input
+                    type="file"
+                    accept=".pdf"
+                    onChange={(event) =>
+                      setFormState((current) => ({
+                        ...current,
+                        pdf: event.target.files?.[0] ?? null,
+                      }))
+                    }
+                    required
+                  />
+                  {formState.pdf ? (
+                    <span className="file-status">
+                      PDF loaded: {formState.pdf.name}
+                    </span>
+                  ) : null}
+                </label>
+                <label>
+                  <span>Questionnaire XLSX</span>
+                  <input
+                    type="file"
+                    accept=".xlsx"
+                    onChange={(event) =>
+                      setFormState((current) => ({
+                        ...current,
+                        questionnaire: event.target.files?.[0] ?? null,
+                      }))
+                    }
+                  />
+                  {formState.questionnaire ? (
+                    <span className="file-status">
+                      Questionnaire loaded: {formState.questionnaire.name}
+                    </span>
+                  ) : null}
+                </label>
+                <button type="submit">Create case</button>
+              </form>
+            ) : null}
           </>
         )}
       </aside>
 
       {activeViewMode === "workspace" ? (
         <main
+          ref={workspaceRef}
           className={
             isEvidenceCollapsed ? "workspace evidence-collapsed" : "workspace"
           }
+          style={workspaceStyle}
         >
-          <section className="panel case-panel">
-            <div className="panel-header">
-              <div>
-                <p className="eyebrow">Selected case</p>
-                <h2>{selectedCase?.name ?? "No case selected"}</h2>
-              </div>
-              <div className="action-row">
-                <button
-                  type="button"
-                  onClick={() => void handleExport("approved_only")}
-                  disabled={!selectedCase}
-                >
-                  Export approved
-                </button>
-                <button
-                  type="button"
-                  className="ghost"
-                  onClick={() => void handleExport("latest_available")}
-                  disabled={!selectedCase}
-                >
-                  Export latest
-                </button>
-                <button
-                  type="button"
-                  className="ghost"
-                  onClick={() => void handleBulkFill()}
-                  disabled={!selectedCase}
-                >
-                  Launch bulk-fill
-                </button>
-              </div>
-            </div>
-            <p className="status-line">{status}</p>
-            {error ? <p className="error-banner">{error}</p> : null}
-            {selectedCase?.latest_bulk_fill ? (
-              <article className="profile-card">
-                <div className="list-header">
-                  <h3>Latest bulk-fill</h3>
-                  <span>{selectedCase.latest_bulk_fill.status}</span>
+          <section className="panel case-panel queue-panel">
+            <div className="case-overview">
+              <div className="panel-header case-overview-header">
+                <div>
+                  <p className="eyebrow">Selected case</p>
+                  <h2>{selectedCase?.name ?? "No case selected"}</h2>
+                  <p className="status-line">
+                    {selectedCase?.client_name
+                      ? `${selectedCase.client_name} · ${humanizeStatus(selectedCase.status, "active")}`
+                      : "Operational queue and export controls remain scoped to the selected case."}
+                  </p>
                 </div>
-                <p>
-                  queued {summaryCount(rowExecutionCounts(), "not_started")} ·
-                  running {summaryCount(rowExecutionCounts(), "running")} ·
-                  drafted {summaryCount(rowExecutionCounts(), "drafted")} ·
-                  failed {summaryCount(rowExecutionCounts(), "failed")}
-                </p>
-                <p>
-                  review {summaryCount(reviewCounts(), "needs_review")} ·
-                  approved {summaryCount(reviewCounts(), "approved")} · rejected{" "}
-                  {summaryCount(reviewCounts(), "rejected")}
-                </p>
-                <p>
-                  {selectedCase.latest_bulk_fill.execution_mode ?? "unclaimed"}{" "}
-                  · {selectedCase.latest_bulk_fill.runner_id ?? "no runner"}
-                </p>
-                {selectedCase.latest_bulk_fill.cancel_requested_at ? (
-                  <p>
-                    Cancel requested at{" "}
-                    {selectedCase.latest_bulk_fill.cancel_requested_at}
-                  </p>
-                ) : null}
-                {selectedCase.latest_bulk_fill.stale_detected_at ? (
-                  <p>
-                    Orphaned/stale at{" "}
-                    {selectedCase.latest_bulk_fill.stale_detected_at}
-                  </p>
-                ) : null}
-                <div className="action-row">
+                <div className="action-row case-command-bar">
                   <button
                     type="button"
-                    className="ghost"
-                    onClick={() => void handleRetryFailedBulkFill()}
-                    disabled={
-                      ![
-                        "completed_with_failures",
-                        "failed",
-                        "cancelled",
-                        "orphaned",
-                      ].includes(selectedCase.latest_bulk_fill.status)
-                    }
+                    onClick={() => void handleExport("approved_only")}
+                    disabled={!selectedCase}
+                    title={exportApprovedTooltip()}
                   >
-                    Retry failed
+                    Export approved
                   </button>
                   <button
                     type="button"
                     className="ghost"
-                    onClick={() => void handleResumeBulkFill()}
-                    disabled={
-                      ![
-                        "completed_with_failures",
-                        "failed",
-                        "cancelled",
-                        "orphaned",
-                      ].includes(selectedCase.latest_bulk_fill.status)
-                    }
+                    onClick={() => void handleExport("latest_available")}
+                    disabled={!selectedCase}
+                    title={exportLatestTooltip()}
                   >
-                    Resume
+                    Export latest
                   </button>
                   <button
                     type="button"
                     className="ghost"
-                    onClick={() => void handleCancelBulkFill()}
-                    disabled={
-                      !["queued", "running"].includes(
+                    onClick={() => void handleBulkFill()}
+                    disabled={!selectedCase}
+                    title={launchBulkFillTooltip()}
+                  >
+                    Launch bulk-fill
+                  </button>
+                </div>
+              </div>
+              <p className="status-line">{status}</p>
+              {error ? <p className="error-banner">{error}</p> : null}
+
+              {queueCounts ? (
+                <div className="queue-summary-row">
+                  <StatusChip
+                    label={`${queueCounts.approved} approved`}
+                    tone="success"
+                    tooltip={queueSummaryTooltip(
+                      "approved",
+                      queueCounts.approved,
+                    )}
+                  />
+                  <StatusChip
+                    label={`${queueCounts.needsReview} needs review`}
+                    tone="warning"
+                    tooltip={queueSummaryTooltip(
+                      "needs_review",
+                      queueCounts.needsReview,
+                    )}
+                  />
+                  <StatusChip
+                    label={`${queueCounts.failed} failed`}
+                    tone="danger"
+                    tooltip={queueSummaryTooltip("failed", queueCounts.failed)}
+                  />
+                  <StatusChip
+                    label={`${queueCounts.notStarted} not started`}
+                    tone="neutral"
+                    tooltip={queueSummaryTooltip(
+                      "not_started",
+                      queueCounts.notStarted,
+                    )}
+                  />
+                </div>
+              ) : null}
+
+              {selectedCase?.latest_bulk_fill ? (
+                <article className="case-ops-strip">
+                  <div className="case-ops-strip-header">
+                    <div>
+                      <p className="eyebrow">Latest bulk-fill</p>
+                      <h3>
+                        {humanizeStatus(selectedCase.latest_bulk_fill.status)}
+                      </h3>
+                    </div>
+                    <StatusChip
+                      label={humanizeStatus(
                         selectedCase.latest_bulk_fill.status,
-                      )
+                      )}
+                      tone={statusToneForBulkFill(
+                        selectedCase.latest_bulk_fill.status,
+                      )}
+                      tooltip={bulkFillStatusTooltip(
+                        selectedCase.latest_bulk_fill.status,
+                      )}
+                    />
+                  </div>
+                  <p className="status-line">
+                    queued {summaryCount(rowExecutionCounts(), "not_started")} ·
+                    running {summaryCount(rowExecutionCounts(), "running")} ·
+                    drafted {summaryCount(rowExecutionCounts(), "drafted")} ·
+                    failed {summaryCount(rowExecutionCounts(), "failed")}
+                  </p>
+                  <p className="status-line">
+                    review {summaryCount(reviewCounts(), "needs_review")} ·
+                    approved {summaryCount(reviewCounts(), "approved")} ·
+                    rejected {summaryCount(reviewCounts(), "rejected")}
+                  </p>
+                  <div className="queue-chip-row">
+                    <StatusChip
+                      label={
+                        selectedCase.latest_bulk_fill.execution_mode ??
+                        "unclaimed"
+                      }
+                      tone="neutral"
+                      muted
+                      tooltip={bulkFillExecutionModeTooltip(
+                        selectedCase.latest_bulk_fill.execution_mode,
+                      )}
+                    />
+                    <StatusChip
+                      label={
+                        selectedCase.latest_bulk_fill.runner_id ?? "no runner"
+                      }
+                      tone="neutral"
+                      muted
+                      tooltip={bulkFillRunnerTooltip(
+                        selectedCase.latest_bulk_fill.runner_id,
+                      )}
+                    />
+                  </div>
+                  <div className="action-row compact-actions">
+                    <button
+                      type="button"
+                      className="ghost"
+                      onClick={() => void handleRetryFailedBulkFill()}
+                      disabled={
+                        ![
+                          "completed_with_failures",
+                          "failed",
+                          "cancelled",
+                          "orphaned",
+                        ].includes(selectedCase.latest_bulk_fill.status)
+                      }
+                    >
+                      Retry failed
+                    </button>
+                    <button
+                      type="button"
+                      className="ghost"
+                      onClick={() => void handleResumeBulkFill()}
+                      disabled={
+                        ![
+                          "completed_with_failures",
+                          "failed",
+                          "cancelled",
+                          "orphaned",
+                        ].includes(selectedCase.latest_bulk_fill.status)
+                      }
+                    >
+                      Resume
+                    </button>
+                    <button
+                      type="button"
+                      className="ghost"
+                      onClick={() => void handleCancelBulkFill()}
+                      disabled={
+                        !["queued", "running"].includes(
+                          selectedCase.latest_bulk_fill.status,
+                        )
+                      }
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </article>
+              ) : null}
+
+              <article className="case-brief">
+                <div className="case-brief-header">
+                  <p className="eyebrow">Case profile</p>
+                  {!selectedCase?.profile ? (
+                    <StatusChip
+                      label="profile missing"
+                      tone="warning"
+                      tooltip={profileMissingTooltip()}
+                    />
+                  ) : null}
+                </div>
+                <p
+                  className={
+                    selectedCase?.profile && !isCaseProfileExpanded
+                      ? "case-brief-summary clamped"
+                      : "case-brief-summary"
+                  }
+                >
+                  {selectedCase?.profile?.summary ??
+                    "No case_profile is available yet for this case."}
+                </p>
+                {selectedCase?.profile?.summary ? (
+                  <button
+                    type="button"
+                    className="question-context-toggle"
+                    onClick={() =>
+                      setIsCaseProfileExpanded((current) => !current)
                     }
                   >
-                    Cancel
+                    {isCaseProfileExpanded ? "Show less" : "Show summary"}
                   </button>
-                </div>
+                ) : null}
               </article>
-            ) : null}
-            {selectedCase?.bulk_fill_history?.length ? (
-              <article className="profile-card">
-                <div className="list-header">
-                  <h3>Bulk-fill history</h3>
-                  <span>{selectedCase.bulk_fill_history.length}</span>
-                </div>
-                {selectedCase.bulk_fill_history.map((job) => (
-                  <div key={job.id} className="history-item">
-                    <strong>{job.status}</strong>
-                    <p>
-                      {job.execution_mode ?? "unclaimed"} ·{" "}
-                      {job.runner_id ?? "no runner"}
-                    </p>
-                    <small>{job.created_at}</small>
-                  </div>
-                ))}
-              </article>
-            ) : null}
-            {selectedCase?.profile ? (
-              <article className="profile-card">
-                <h3>Case profile</h3>
-                <p>{selectedCase.profile.summary}</p>
-                <small>
-                  {selectedCase.profile.schema_version} ·{" "}
-                  {selectedCase.profile.prompt_set_version}
-                </small>
-              </article>
-            ) : (
-              <article className="profile-card empty">
-                <h3>Case profile</h3>
-                <p>No case_profile is available.</p>
-              </article>
-            )}
+            </div>
 
             <div className="row-list">
-              <div className="list-header">
-                <h3>Questionnaire rows</h3>
-                <span>{filteredRows.length}</span>
+              <div className="queue-header">
+                <div>
+                  <h3>Questionnaire rows</h3>
+                  <p className="status-line">
+                    {filteredRows.length} rows in queue. Scan state first, then
+                    open one row at a time.
+                  </p>
+                </div>
+                <div className="queue-toolbar">
+                  <label className="filter-row">
+                    <span>Filter by state</span>
+                    <select
+                      value={rowFilter}
+                      onChange={(event) =>
+                        setRowFilter(event.target.value as RowFilter)
+                      }
+                    >
+                      <option value="all">all</option>
+                      <option value="not_started">not started</option>
+                      <option value="running">running</option>
+                      <option value="needs_review">needs review</option>
+                      <option value="approved">approved</option>
+                      <option value="rejected">rejected</option>
+                      <option value="failed">failed</option>
+                      <option value="skipped">skipped</option>
+                    </select>
+                  </label>
+                </div>
               </div>
-              <label className="filter-row">
-                <span>Filter</span>
-                <select
-                  value={rowFilter}
-                  onChange={(event) =>
-                    setRowFilter(event.target.value as RowFilter)
-                  }
-                >
-                  <option value="all">all</option>
-                  <option value="not_started">not started</option>
-                  <option value="running">running</option>
-                  <option value="needs_review">needs review</option>
-                  <option value="approved">approved</option>
-                  <option value="rejected">rejected</option>
-                  <option value="failed">failed</option>
-                  <option value="skipped">skipped</option>
-                </select>
-              </label>
-              {filteredRows.map((row) => (
-                <button
-                  key={row.id}
-                  type="button"
-                  data-row-visual-state={rowVisualState(row)}
-                  className={
-                    selectedRow?.id === row.id ? "row-card active" : "row-card"
-                  }
-                  onClick={() => {
-                    if (selectedCase) {
-                      void selectRow(selectedCase, row);
-                    }
-                  }}
-                >
-                  <strong>Row {row.source_row_number}</strong>
-                  <span>{row.question}</span>
-                  <small>{row.review_status}</small>
-                  {row.last_bulk_fill_status ? (
-                    <small>
-                      {row.last_bulk_fill_status} · attempt{" "}
-                      {row.last_bulk_fill_attempt_number}
-                    </small>
-                  ) : null}
-                </button>
-              ))}
+              <div className="queue-list">
+                {filteredRows.map((row) => {
+                  const answerStateLabel =
+                    row.latest_attempt_state === "answer_available" ||
+                    row.review_status === "approved" ||
+                    row.review_status === "needs_review"
+                      ? "answer ready"
+                      : row.latest_attempt_state === "pending_no_answer" ||
+                          row.review_status === "running"
+                        ? "in progress"
+                        : row.latest_attempt_state === "failed_no_answer" ||
+                            row.review_status === "failed"
+                          ? "failed attempt"
+                          : "not started";
+                  const secondaryState = row.approved_answer_version_id
+                    ? "approved pointer"
+                    : row.last_bulk_fill_status
+                      ? humanizeStatus(row.last_bulk_fill_status)
+                      : null;
+                  return (
+                    <button
+                      key={row.id}
+                      type="button"
+                      aria-label={rowQueueAriaLabel(row)}
+                      title={row.source_row_id}
+                      data-row-visual-state={rowVisualState(row)}
+                      className={
+                        selectedRow?.id === row.id
+                          ? "row-card active"
+                          : "row-card"
+                      }
+                      onClick={() => {
+                        if (selectedCase) {
+                          void selectRow(selectedCase, row);
+                        }
+                      }}
+                    >
+                      <div className="row-card-top">
+                        <strong>Row {row.source_row_number}</strong>
+                        <div className="queue-chip-row">
+                          <StatusChip
+                            label={reviewStatusLabel(row.review_status, {
+                              hasApprovedAnswer:
+                                !!row.approved_answer_version_id ||
+                                !!row.approved_answer_text,
+                            })}
+                            tone={statusToneForReviewStatus(row.review_status)}
+                            tooltip={reviewStatusTooltip(row.review_status, {
+                              hasApprovedAnswer:
+                                !!row.approved_answer_version_id ||
+                                !!row.approved_answer_text,
+                            })}
+                          />
+                        </div>
+                      </div>
+                      <p className="row-card-question">{row.question}</p>
+                      <div className="row-card-meta-line">
+                        <span>{answerStateLabel}</span>
+                        {secondaryState ? <span>{secondaryState}</span> : null}
+                        {row.last_bulk_fill_attempt_number ? (
+                          <span>
+                            attempt {row.last_bulk_fill_attempt_number}
+                          </span>
+                        ) : null}
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
             </div>
           </section>
 
@@ -1300,69 +2580,190 @@ function App() {
                 : "panel answer-panel"
             }
           >
-            <div className="panel-header">
-              <div>
-                <p className="eyebrow">Draft workspace</p>
-                <h2>
-                  {selectedRow
-                    ? `Row ${selectedRow.source_row_number}`
-                    : "Select a row"}
-                </h2>
-              </div>
-            </div>
-            <article className="question-card">
-              <div className="question-copy">
-                <div>
-                  <h3>Question</h3>
-                  <p>
-                    {selectedRow?.question ?? "No questionnaire row selected."}
-                  </p>
-                </div>
-                <div className="question-context-block">
-                  <h3>Context</h3>
-                  <p
-                    className={
-                      hasLongContext && !isContextExpanded
-                        ? "question-context-preview clamped"
-                        : "question-context-preview"
-                    }
-                  >
-                    {selectedRow?.context ?? "No row context loaded."}
-                  </p>
-                  {hasLongContext ? (
-                    <button
-                      type="button"
-                      className="question-context-toggle"
-                      onClick={() =>
-                        setIsContextExpanded((current) => !current)
+            <article
+              className={
+                hasGeneratedAnswer || hasApprovedAnswer
+                  ? "workspace-hero compact"
+                  : "workspace-hero"
+              }
+            >
+              <div className="workspace-hero-main">
+                <div className="workspace-hero-kicker">
+                  <div className="workspace-hero-copy">
+                    <p className="eyebrow">Selected row</p>
+                    <div className="workspace-hero-id-row">
+                      <h2 className="workspace-hero-row-label">
+                        {selectedRow
+                          ? `Row ${selectedRow.source_row_number}`
+                          : "Select a row"}
+                      </h2>
+                    </div>
+                    <p className="workspace-hero-question">
+                      {selectedRow?.question ??
+                        "Select a row from the queue to inspect its drafting lineage."}
+                    </p>
+                    <div className="workspace-inline-context">
+                    <span title={rowBackgroundTooltip()}>Row background</span>
+                    <p
+                      className={
+                        isContextExpanded
+                          ? "workspace-context-copy"
+                          : "workspace-context-copy clamped"
+                        }
+                      >
+                        {selectedRow?.context ?? "No row background loaded."}
+                      </p>
+                      {selectedRow && (selectedRow.context.length ?? 0) > 180 ? (
+                        <button
+                          type="button"
+                          className="question-context-toggle"
+                          onClick={() =>
+                            setIsContextExpanded((current) => !current)
+                          }
+                        >
+                          {isContextExpanded
+                            ? "Show less background"
+                            : "Show full background"}
+                        </button>
+                      ) : null}
+                    </div>
+                  </div>
+                  <div className="workspace-hero-status-rail">
+                    {selectedRow ? (
+                      <StatusChip
+                        label={reviewStatusLabel(selectedRow.review_status, {
+                          hasApprovedAnswer,
+                        })}
+                        tone={statusToneForReviewStatus(
+                          selectedRow.review_status,
+                        )}
+                        tooltip={reviewStatusTooltip(selectedRow.review_status, {
+                          hasApprovedAnswer,
+                        })}
+                      />
+                    ) : null}
+                    <StatusChip
+                      label={humanizeStatus(retrievalSufficiency, "not run")}
+                      tone={statusToneForSufficiency(retrievalSufficiency)}
+                      tooltip={retrievalSufficiencyTooltip(
+                        retrievalSufficiency,
+                      )}
+                    />
+                    <StatusChip
+                      label={`Attempt ${attemptStateLabel(activeAttemptState)}`}
+                      tone={statusToneForAttemptState(activeAttemptState)}
+                      tooltip={attemptStateTooltip(activeAttemptState)}
+                    />
+                    <StatusChip
+                      label={
+                        hasApprovedAnswer
+                          ? selectedAnswerIsApproved
+                            ? "viewing approved answer"
+                            : "approved answer retained"
+                          : "Approval not set"
                       }
-                    >
-                      {isContextExpanded ? "Show less" : "Show full context"}
-                    </button>
-                  ) : null}
+                      tone={
+                        hasApprovedAnswer
+                          ? selectedAnswerIsApproved
+                            ? "success"
+                            : "warning"
+                          : "neutral"
+                      }
+                      tooltip={approvalStateTooltip({
+                        hasApprovedAnswer,
+                        selectedAnswerIsApproved,
+                      })}
+                    />
+                    {selectedRow?.last_bulk_fill_status ? (
+                      <StatusChip
+                        label={`${humanizeStatus(selectedRow.last_bulk_fill_status)} · attempt ${selectedRow.last_bulk_fill_attempt_number}`}
+                        tone={statusToneForBulkFill(
+                          selectedRow.last_bulk_fill_status,
+                        )}
+                        muted
+                        tooltip={rowBulkFillAttemptTooltip(
+                          selectedRow.last_bulk_fill_status,
+                          selectedRow.last_bulk_fill_attempt_number,
+                        )}
+                      />
+                    ) : null}
+                  </div>
                 </div>
-              </div>
-              <div className="row-meta-grid">
-                <div className="row-meta-item">
-                  <span>Review</span>
-                  <strong>
-                    {selectedRow?.review_status ?? "No row selected."}
-                  </strong>
-                </div>
-                <div className="row-meta-item">
-                  <span>Latest attempt</span>
-                  <strong>{attemptStateLabel(activeAttemptState)}</strong>
-                </div>
-                <div className="row-meta-item">
-                  <span>Bulk-fill</span>
-                  <strong>{lastBulkFillAttemptLabel}</strong>
-                </div>
+                {!hasGeneratedAnswer ? (
+                  <div className="workspace-next-step compact">
+                    <span>Next step</span>
+                    <p>{nextStepSummary}</p>
+                  </div>
+                ) : null}
+                {!hasGeneratedAnswer && !hasApprovedAnswer ? (
+                  <div className="row-meta-grid workspace-meta-grid">
+                    <div className="row-meta-item">
+                      <span>Latest attempt</span>
+                      <strong>{attemptStateLabel(activeAttemptState)}</strong>
+                    </div>
+                    <div className="row-meta-item">
+                      <span>Retrieval sufficiency</span>
+                      <strong>
+                        {humanizeStatus(retrievalSufficiency, "not run")}
+                      </strong>
+                    </div>
+                    <div className="row-meta-item">
+                      <span>Approved answer</span>
+                      <strong>not approved</strong>
+                    </div>
+                  </div>
+                ) : null}
               </div>
             </article>
 
+            <div className="answer-toolbar">
+              <div
+                className="answer-view-tabs"
+                role="tablist"
+                aria-label="Review view"
+              >
+                <button
+                  type="button"
+                  className={
+                    reviewViewMode === "draft" ? "view-tab active" : "view-tab"
+                  }
+                  onClick={() => setReviewViewMode("draft")}
+                  aria-pressed={reviewViewMode === "draft"}
+                >
+                  Read draft
+                </button>
+                <button
+                  type="button"
+                  className={
+                    reviewViewMode === "compare"
+                      ? "view-tab active"
+                      : "view-tab"
+                  }
+                  onClick={() => setReviewViewMode("compare")}
+                  aria-pressed={reviewViewMode === "compare"}
+                  disabled={!hasApprovedAnswer || !selectedAnswerVersion}
+                >
+                  Compare
+                </button>
+                <button
+                  type="button"
+                  className={
+                    reviewViewMode === "history"
+                      ? "view-tab active"
+                      : "view-tab"
+                  }
+                  onClick={() => setReviewViewMode("history")}
+                  aria-pressed={reviewViewMode === "history"}
+                  disabled={answerVersions.length < 1}
+                >
+                  History
+                </button>
+              </div>
+            </div>
+
             <div
               ref={chatLogRef}
-              className="chat-log"
+              className="chat-log answer-stage"
               aria-label="Conversation history"
               style={
                 chatViewportHeight
@@ -1374,59 +2775,363 @@ function App() {
                   : undefined
               }
             >
-              {(threadState?.messages ?? []).map((item, index) => {
-                const messageVisualState: ChatMessageVisualState =
-                  approvedMessageIndex < 0
-                    ? "neutral"
-                    : index === approvedMessageIndex
-                      ? "approved"
-                      : index > approvedMessageIndex
-                        ? "after-approved"
-                        : "neutral";
-                return (
-                  <article
-                    key={item.id}
-                    data-message-visual-state={messageVisualState}
-                    className={
-                      item.role === "assistant"
-                        ? "message assistant"
-                        : "message"
-                    }
-                  >
-                    <span>{item.role}</span>
-                    <p>{item.content}</p>
+              {reviewViewMode === "draft" ? (
+                <>
+                  <div className="timeline-header">
+                    <div>
+                      <p className="eyebrow">Conversation</p>
+                      <h3>Thread history</h3>
+                    </div>
+                    <p className="status-line">
+                      The conversation is the primary review artifact for this
+                      row. Read the latest assistant output in sequence with the
+                      revision history.
+                    </p>
+                  </div>
+
+                  {threadState?.thread_state === "failed_no_answer" ? (
+                    <article className="timeline-failure">
+                      <div className="timeline-entry-header">
+                        <span className="timeline-entry-eyebrow">
+                          Latest draft attempt failed
+                        </span>
+                        <StatusChip
+                          label={attemptStateLabel(threadState.thread_state)}
+                          tone="danger"
+                          tooltip={attemptStateTooltip(threadState.thread_state)}
+                        />
+                      </div>
+                      <p>
+                        {threadState.failure_detail ??
+                          "The latest attempt did not produce an answer version."}
+                      </p>
+                    </article>
+                  ) : null}
+
+                  {(threadState?.messages ?? []).length ? (
+                    (() => {
+                      let assistantIndex = 0;
+                      let userIndex = 0;
+                      return (threadState?.messages ?? []).map(
+                        (item, index) => {
+                          const messageVisualState: ChatMessageVisualState =
+                            approvedMessageIndex < 0
+                              ? "neutral"
+                              : index === approvedMessageIndex
+                                ? "approved"
+                                : index > approvedMessageIndex
+                                  ? "after-approved"
+                                  : "neutral";
+                          if (item.role === "assistant") {
+                            assistantIndex += 1;
+                          }
+                          if (item.role === "user") {
+                            userIndex += 1;
+                          }
+                          const linkedVersion = item.answer_version_id
+                            ? answerVersionsById.get(item.answer_version_id)
+                            : null;
+                          return (
+                            <article
+                              key={item.id}
+                              data-message-visual-state={messageVisualState}
+                              className="message timeline-entry"
+                              data-role={item.role}
+                            >
+                              <div className="timeline-marker" />
+                              <div className="timeline-entry-body">
+                                <div className="timeline-entry-header">
+                                  <span className="timeline-entry-eyebrow">
+                                    {timelineEntryEyebrow(item)}
+                                  </span>
+                                  <div className="queue-chip-row">
+                                    {linkedVersion ? (
+                                      <StatusChip
+                                        label={`v${linkedVersion.version_number}`}
+                                        tone="accent"
+                                        muted
+                                        tooltip={answerVersionTooltip(
+                                          linkedVersion.version_number,
+                                        )}
+                                      />
+                                    ) : null}
+                                    {item.answer_version_id ===
+                                    selectedRow?.approved_answer_version_id ? (
+                                      <StatusChip
+                                        label="approved pointer"
+                                        tone="success"
+                                        muted
+                                        tooltip={approvedPointerTooltip()}
+                                      />
+                                    ) : null}
+                                  </div>
+                                </div>
+                                <h4>
+                                  {timelineEntryTitle(
+                                    item,
+                                    assistantIndex - 1,
+                                    userIndex - 1,
+                                  )}
+                                </h4>
+                                <p>{item.content}</p>
+                              </div>
+                            </article>
+                          );
+                        },
+                      );
+                    })()
+                  ) : (
+                    <article className="timeline-empty">
+                      <h4>No drafting events yet</h4>
+                      <p>
+                        Generate or retry a grounded answer to start the row
+                        timeline.
+                      </p>
+                    </article>
+                  )}
+                  {hasApprovedAnswer && !selectedAnswerIsApproved ? (
+                    <article className="conversation-callout">
+                      <span>
+                        The currently approved answer is older than the selected
+                        draft.
+                      </span>
+                      <button
+                        type="button"
+                        className="panel-toggle"
+                        onClick={() => setReviewViewMode("compare")}
+                      >
+                        Compare with approved
+                      </button>
+                    </article>
+                  ) : null}
+                </>
+              ) : null}
+
+              {reviewViewMode === "compare" ? (
+                <div className="compare-mode-layout">
+                  <article className="answer-output-card compare-card">
+                    <div className="answer-output-header">
+                      <div>
+                        <p className="eyebrow">Selected version</p>
+                        <h3>
+                          {selectedAnswerVersion
+                            ? `Version ${selectedAnswerVersion.version_number}`
+                            : "No selected version"}
+                        </h3>
+                      </div>
+                      {selectedAnswerVersion ? (
+                        <StatusChip
+                          label={generationPathLabel(
+                            selectedAnswerVersion.generation_path,
+                          )}
+                          tone="accent"
+                          muted
+                          tooltip={generationPathTooltip(
+                            selectedAnswerVersion.generation_path,
+                          )}
+                        />
+                      ) : null}
+                    </div>
+                    <p className="answer-output-text">
+                      {selectedAnswerVersion?.answer_text ??
+                        "Select a version from history to compare it."}
+                    </p>
                   </article>
-                );
-              })}
+                  <article className="answer-output-card compare-card approved-card">
+                    <div className="answer-output-header">
+                      <div>
+                        <p className="eyebrow">Approved answer</p>
+                        <h3>
+                          {approvedAnswerVersion
+                            ? `Version ${approvedAnswerVersion.version_number}`
+                            : "No approved answer"}
+                        </h3>
+                      </div>
+                      {approvedAnswerVersion ? (
+                        <StatusChip
+                          label="canonical"
+                          tone="success"
+                          muted
+                          tooltip={canonicalTooltip()}
+                        />
+                      ) : null}
+                    </div>
+                    <p className="answer-output-text">
+                      {approvedAnswerVersion?.answer_text ??
+                        selectedRow?.approved_answer_text ??
+                        "No approved answer yet."}
+                    </p>
+                  </article>
+                </div>
+              ) : null}
+
+              {reviewViewMode === "history" ? (
+                <div className="history-mode-layout">
+                  <div className="history-list-header">
+                    <div>
+                      <p className="eyebrow">Answer history</p>
+                      <h3>Version list</h3>
+                    </div>
+                    <p className="status-line">
+                      Select a version to inspect it, then approve or reject
+                      that version directly.
+                    </p>
+                  </div>
+                  <div className="history-rail history-rail-wide">
+                    {answerVersions.map((version) => (
+                      <button
+                        key={version.id}
+                        type="button"
+                        aria-label={`Version ${version.version_number}`}
+                        className={
+                          selectedAnswerVersionId === version.id
+                            ? "history-item active"
+                            : "history-item"
+                        }
+                        onClick={() => void inspectAnswerVersion(version)}
+                      >
+                        <div className="history-item-top">
+                          <strong>Version {version.version_number}</strong>
+                          <div className="queue-chip-row">
+                            <StatusChip
+                              label={generationPathLabel(
+                                version.generation_path,
+                              )}
+                              tone="neutral"
+                              muted
+                              tooltip={generationPathTooltip(
+                                version.generation_path,
+                              )}
+                            />
+                            {version.id ===
+                            selectedRow?.approved_answer_version_id ? (
+                              <StatusChip
+                                label="approved pointer"
+                                tone="success"
+                                muted
+                                tooltip={approvedPointerTooltip()}
+                              />
+                            ) : null}
+                          </div>
+                        </div>
+                        <p
+                          className={
+                            selectedAnswerVersionId === version.id
+                              ? "history-answer-text"
+                              : "history-answer-text clamped"
+                          }
+                        >
+                          {version.answer_text}
+                        </p>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
             </div>
 
-            <div ref={composerRef} className="composer">
-              {hasGeneratedAnswer ? (
-                <>
-                  <textarea
-                    value={message}
-                    onChange={(event) => setMessage(event.target.value)}
-                    placeholder="Ask for a style revision such as shorter, clearer, or more formal."
-                    rows={5}
-                    disabled={isDrafting}
-                  />
-                  <button
-                    type="button"
-                    onClick={() => void handleReviseAnswer()}
-                    disabled={!selectedRow || !message.trim() || isDrafting}
-                  >
-                    {isDrafting
-                      ? "Waiting for model response..."
-                      : "Revise answer"}
-                  </button>
+            <div ref={composerRef} className="review-action-bar">
+              {reviewViewMode === "draft" && draftActionMode === "revise" ? (
+                <div className="composer review-drawer">
+                  <label className="revision-brief">
+                    <span>Revision brief</span>
+                    <textarea
+                      value={message}
+                      onChange={(event) => setMessage(event.target.value)}
+                      placeholder="Ask for a style revision such as shorter, clearer, or more formal."
+                      rows={4}
+                      disabled={isDrafting}
+                    />
+                  </label>
                   <div className="action-row">
                     <button
                       type="button"
+                      onClick={() => void handleReviseAnswer()}
+                      disabled={!selectedRow || !message.trim() || isDrafting}
+                    >
+                      {isDrafting
+                        ? "Waiting for model response..."
+                        : "Revise answer"}
+                    </button>
+                    <button
+                      type="button"
                       className="ghost"
+                      onClick={() => setDraftActionMode(null)}
+                      disabled={isDrafting}
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              ) : null}
+
+              {reviewViewMode === "draft" &&
+              draftActionMode === "regenerate" ? (
+                <div className="composer review-drawer">
+                  <div className="review-drawer-copy">
+                    <span>Content refresh</span>
+                    <p>
+                      Regeneration reruns retrieval and may change grounded
+                      claims. Use this when the answer needs new substance, not
+                      just cleaner wording.
+                    </p>
+                  </div>
+                  <div className="action-row">
+                    <button
+                      type="button"
                       onClick={() => void handleGenerateAnswer()}
                       disabled={!selectedRow || isDrafting}
                     >
-                      Regenerate answer
+                      {isDrafting
+                        ? "Waiting for model response..."
+                        : "Regenerate answer"}
+                    </button>
+                    <button
+                      type="button"
+                      className="ghost"
+                      onClick={() => setDraftActionMode(null)}
+                      disabled={isDrafting}
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              ) : null}
+
+              <div className="action-row primary-review-actions">
+                {hasGeneratedAnswer && reviewViewMode === "draft" ? (
+                  <>
+                    <button
+                      type="button"
+                      className={
+                        draftActionMode === "revise"
+                          ? "ghost active-toggle"
+                          : "ghost"
+                      }
+                      onClick={() =>
+                        setDraftActionMode((current) =>
+                          current === "revise" ? null : "revise",
+                        )
+                      }
+                      disabled={!selectedRow || isDrafting}
+                    >
+                      Revise wording
+                    </button>
+                    <button
+                      type="button"
+                      className={
+                        draftActionMode === "regenerate"
+                          ? "ghost active-toggle"
+                          : "ghost"
+                      }
+                      onClick={() =>
+                        setDraftActionMode((current) =>
+                          current === "regenerate" ? null : "regenerate",
+                        )
+                      }
+                      disabled={!selectedRow || isDrafting}
+                    >
+                      Regenerate content
                     </button>
                     <button
                       type="button"
@@ -1444,100 +3149,66 @@ function App() {
                     >
                       Reject row
                     </button>
+                  </>
+                ) : hasGeneratedAnswer &&
+                  (reviewViewMode === "history" ||
+                    reviewViewMode === "compare") ? (
+                  <div className="history-review-actions">
+                    <p className="status-line">
+                      {rejectActionHint({
+                        selectedVersionId: selectedAnswerVersion?.id ?? null,
+                        approvedVersionId:
+                          selectedRow?.approved_answer_version_id,
+                        hasApprovedAnswer,
+                      })}
+                    </p>
+                    <div className="action-row">
+                      <button
+                        type="button"
+                        className="ghost"
+                        onClick={() => void handleApproveSelectedVersion()}
+                        disabled={!selectedRow || !selectedAnswerVersion}
+                      >
+                        Approve selected version
+                      </button>
+                      <button
+                        type="button"
+                        className="ghost"
+                        onClick={() => void handleRejectRow()}
+                        disabled={!selectedRow || !selectedAnswerVersion}
+                      >
+                        {rejectActionLabel({
+                          selectedVersionId: selectedAnswerVersion?.id ?? null,
+                          approvedVersionId:
+                            selectedRow?.approved_answer_version_id,
+                          hasApprovedAnswer,
+                        })}
+                      </button>
+                    </div>
                   </div>
-                </>
-              ) : (
-                <>
-                  <button
-                    type="button"
-                    onClick={() => void handleGenerateAnswer()}
-                    disabled={!selectedRow || isDrafting}
-                  >
-                    {isDrafting
-                      ? "Waiting for model response..."
-                      : activeAttemptState === "failed_no_answer"
-                        ? "Retry answer"
-                        : "Generate answer"}
-                  </button>
-                  <div className="action-row">
+                ) : (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => void handleGenerateAnswer()}
+                      disabled={!selectedRow || isDrafting}
+                    >
+                      {isDrafting
+                        ? "Waiting for model response..."
+                        : activeAttemptState === "failed_no_answer"
+                          ? "Retry answer"
+                          : "Generate answer"}
+                    </button>
                     <button type="button" className="ghost" disabled>
                       Approve selected version
                     </button>
                     <button type="button" className="ghost" disabled>
                       Reject row
                     </button>
-                  </div>
-                </>
-              )}
+                  </>
+                )}
+              </div>
             </div>
-
-            {threadState?.thread_state === "failed_no_answer" ? (
-              <article className="draft-card">
-                <div className="list-header">
-                  <h3>Latest draft attempt failed</h3>
-                  <span>{attemptStateLabel(threadState.thread_state)}</span>
-                </div>
-                <p>
-                  {threadState.failure_detail ??
-                    "The latest attempt did not produce an answer version."}
-                </p>
-              </article>
-            ) : null}
-
-            <article className="draft-card">
-              <div className="list-header">
-                <h3>Latest drafted answer</h3>
-                <span>
-                  {selectedAnswerVersion
-                    ? `v${selectedAnswerVersion.version_number}`
-                    : "none"}
-                </span>
-              </div>
-              <p>
-                {selectedAnswerVersion?.answer_text ??
-                  (threadState?.thread_state === "failed_no_answer"
-                    ? "The latest attempt failed before producing an answer version. Select an earlier version from history or retry."
-                    : "No draft yet.")}
-              </p>
-            </article>
-
-            <article className="draft-card">
-              <div className="list-header">
-                <h3>Approved answer</h3>
-                <span>
-                  {approvedAnswerVersion
-                    ? `v${approvedAnswerVersion.version_number}`
-                    : "none"}
-                </span>
-              </div>
-              <p>
-                {approvedAnswerVersion?.answer_text ??
-                  selectedRow?.approved_answer_text ??
-                  "No approved answer yet."}
-              </p>
-            </article>
-
-            <article className="history-card">
-              <div className="list-header">
-                <h3>Answer history</h3>
-                <span>{answerVersions.length}</span>
-              </div>
-              {answerVersions.map((version) => (
-                <button
-                  key={version.id}
-                  type="button"
-                  className={
-                    selectedAnswerVersionId === version.id
-                      ? "history-item active"
-                      : "history-item"
-                  }
-                  onClick={() => void inspectAnswerVersion(version)}
-                >
-                  <strong>Version {version.version_number}</strong>
-                  <p>{version.answer_text}</p>
-                </button>
-              ))}
-            </article>
 
             {devPanelsEnabled ? (
               <article className="dev-card">
@@ -1552,9 +3223,8 @@ function App() {
                 {inspectedAnswerVersion ? (
                   <>
                     <p className="status-line">
-                      {inspectedAnswerVersion.generation_path.replaceAll(
-                        "_",
-                        " ",
+                      {generationPathLabel(
+                        inspectedAnswerVersion.generation_path,
                       )}{" "}
                       ·{" "}
                       {inspectedAnswerVersion.llm_capture_stage ??
@@ -1609,82 +3279,243 @@ function App() {
                 ? "panel evidence-panel collapsed"
                 : "panel evidence-panel"
             }
+            data-resizing={isEvidenceResizing ? "true" : "false"}
           >
+            <button
+              type="button"
+              className="evidence-edge-toggle"
+              onClick={() => setIsEvidenceCollapsed((current) => !current)}
+              aria-label={
+                isEvidenceCollapsed
+                  ? "Expand retrieved evidence panel"
+                  : "Collapse retrieved evidence panel"
+              }
+            >
+              <SidebarEdgeToggleIcon
+                collapsed={isEvidenceCollapsed}
+                side="right"
+              />
+            </button>
+            {!isEvidenceCollapsed ? (
+              <div
+                className={
+                  isEvidenceResizing
+                    ? "evidence-panel-resizer active"
+                    : "evidence-panel-resizer"
+                }
+                role="separator"
+                tabIndex={0}
+                aria-label="Resize evidence inspector"
+                aria-orientation="vertical"
+                aria-valuemin={EVIDENCE_PANEL_MIN_WIDTH}
+                aria-valuemax={evidencePanelMaxWidth}
+                aria-valuenow={effectiveEvidencePanelWidth}
+                onPointerDown={handleEvidenceResizeStart}
+                onKeyDown={handleEvidenceResizeKeyDown}
+              />
+            ) : null}
             {isEvidenceCollapsed ? (
               <div className="panel-collapsed-shell">
-                <button
-                  type="button"
-                  className="panel-toggle"
-                  onClick={() => setIsEvidenceCollapsed(false)}
-                  aria-label="Expand retrieved evidence panel"
-                >
-                  Show
-                </button>
                 <span className="collapsed-rail-label">Retrieved evidence</span>
               </div>
             ) : (
               <>
                 <div className="panel-header">
                   <div>
-                    <p className="eyebrow">Retrieved evidence</p>
+                    <p className="eyebrow">Evidence inspector</p>
                     <h2>Grounding</h2>
                   </div>
-                  <button
-                    type="button"
-                    className="panel-toggle"
-                    onClick={() => setIsEvidenceCollapsed(true)}
-                    aria-label="Collapse retrieved evidence panel"
-                  >
-                    Hide
-                  </button>
                 </div>
-                {threadState?.retrieval ? (
-                  <div className="retrieval-summary">
-                    <p className="status-line">
-                      {threadState.retrieval.retrieval_action.replaceAll(
-                        "_",
-                        " ",
-                      )}{" "}
-                      ·{" "}
-                      {threadState.retrieval.revision_mode.replaceAll("_", " ")}{" "}
-                      · {threadState.retrieval.sufficiency}
-                      {threadState.retrieval.broadened ? " · broadened" : ""}
-                      {threadState.retrieval.degraded ? " · degraded" : ""}
-                    </p>
-                    {threadState.retrieval.notes.length ? (
-                      <ul className="retrieval-note-list">
-                        {threadState.retrieval.notes.map((note) => (
-                          <li key={note}>{note}</li>
-                        ))}
-                      </ul>
-                    ) : null}
-                  </div>
-                ) : null}
+                <div className="evidence-panel-body">
+                  {threadState?.retrieval ? (
+                    <div className="retrieval-summary inspector-summary">
+                      <div className="queue-chip-row">
+                        <StatusChip
+                          label={humanizeStatus(
+                            threadState.retrieval.sufficiency,
+                          )}
+                          tone={statusToneForSufficiency(
+                            threadState.retrieval.sufficiency,
+                          )}
+                          tooltip={retrievalSufficiencyTooltip(
+                            threadState.retrieval.sufficiency,
+                          )}
+                        />
+                        <StatusChip
+                          label={retrievalActionLabel(
+                            threadState.retrieval.retrieval_action,
+                          )}
+                          tone="accent"
+                          muted
+                          tooltip={retrievalActionTooltip(
+                            threadState.retrieval.retrieval_action,
+                          )}
+                        />
+                        <StatusChip
+                          label={revisionModeLabel(
+                            threadState.retrieval.revision_mode,
+                          )}
+                          tone="neutral"
+                          muted
+                          tooltip={revisionModeTooltip(
+                            threadState.retrieval.revision_mode,
+                          )}
+                        />
+                        {threadState.retrieval.broadened ? (
+                          <StatusChip
+                            label="broadened"
+                            tone="warning"
+                            muted
+                            tooltip={broadenedTooltip()}
+                          />
+                        ) : null}
+                        {threadState.retrieval.degraded ? (
+                          <StatusChip
+                            label="degraded"
+                            tone="warning"
+                            muted
+                            tooltip={degradedTooltip()}
+                          />
+                        ) : null}
+                      </div>
+                      {threadState.retrieval.notes.length ? (
+                        <ul className="retrieval-note-list">
+                          {threadState.retrieval.notes.map((note) => (
+                            <li key={note}>{note}</li>
+                          ))}
+                        </ul>
+                      ) : null}
+                    </div>
+                  ) : null}
 
-                {Object.entries(groupedEvidence).length ? (
-                  Object.entries(groupedEvidence).map(([label, items]) => (
-                    <article key={label} className="evidence-group">
-                      <h3>{label.replaceAll("_", " ")}</h3>
-                      {items.map((item) => (
-                        <div key={item.id} className="evidence-card">
-                          <strong>{item.source_title}</strong>
-                          <p>{item.excerpt}</p>
-                          <small>
-                            {item.source_kind} · score {item.score.toFixed(3)}
-                          </small>
+                  {evidenceAuthorityGroups.length ? (
+                    evidenceAuthorityGroups.map(({ meta, items }) => (
+                      <article
+                        key={meta.key}
+                        className="evidence-group"
+                        data-authority={meta.key}
+                      >
+                        <div className="evidence-group-header">
+                          <div className="evidence-group-title-row">
+                            <h3>{meta.label}</h3>
+                            <span className="evidence-group-count">
+                              {pluralize(items.length, "item", "items")}
+                            </span>
+                          </div>
+                          <p className="status-line">{meta.description}</p>
                         </div>
-                      ))}
+                        {items.map((item) => {
+                          const detailRows = evidenceDetails(item);
+                          const historicalSections =
+                            item.source_kind === "historical_qa_row"
+                              ? parseHistoricalEvidenceExcerpt(item.excerpt)
+                              : null;
+                          const isExpanded = expandedEvidenceIds.includes(
+                            item.id,
+                          );
+                          return (
+                            <div
+                              key={item.id}
+                              className="evidence-card"
+                              data-authority={meta.key}
+                            >
+                              <div className="evidence-card-header">
+                                <div className="evidence-card-title-block">
+                                  <p className="evidence-card-kicker">
+                                    {evidenceTraceLabel(item)}
+                                  </p>
+                                  <h4 className="evidence-card-title">
+                                    {evidenceDisplayTitle(item)}
+                                  </h4>
+                                </div>
+                                <MetaBadge
+                                  label={`Relevance ${item.score.toFixed(3)}`}
+                                  tooltip={relevanceTooltip(item.score)}
+                                />
+                              </div>
+                              {historicalSections ? (
+                                <div className="historical-evidence">
+                                  {historicalSections.map((section) => (
+                                    <section
+                                      key={`${item.id}-${section.label}`}
+                                      className="historical-evidence-section"
+                                    >
+                                      <p className="historical-evidence-label">
+                                        {section.label}
+                                      </p>
+                                      <p
+                                        className={
+                                          isExpanded
+                                            ? "historical-evidence-copy"
+                                            : "historical-evidence-copy clamped"
+                                        }
+                                      >
+                                        {section.value}
+                                      </p>
+                                    </section>
+                                  ))}
+                                </div>
+                              ) : (
+                                <p
+                                  className={
+                                    isExpanded
+                                      ? "evidence-excerpt"
+                                      : "evidence-excerpt clamped"
+                                  }
+                                >
+                                  {formatEvidenceExcerpt(item)}
+                                </p>
+                              )}
+                              {item.excerpt.length > 180 ? (
+                                <button
+                                  type="button"
+                                  className="question-context-toggle evidence-toggle"
+                                  onClick={() =>
+                                    setExpandedEvidenceIds((current) =>
+                                      current.includes(item.id)
+                                        ? current.filter(
+                                            (value) => value !== item.id,
+                                          )
+                                        : [...current, item.id],
+                                    )
+                                  }
+                                >
+                                  {isExpanded
+                                    ? "Show less"
+                                    : historicalSections
+                                      ? "Show full example"
+                                      : "Show excerpt"}
+                                </button>
+                              ) : null}
+                              {detailRows.length ? (
+                                <dl className="evidence-meta-list">
+                                  {detailRows.map((detail) => (
+                                    <div
+                                      key={`${item.id}-${detail.label}`}
+                                      className="evidence-meta-row"
+                                    >
+                                      <dt>{detail.label}</dt>
+                                      <dd>{detail.value}</dd>
+                                    </div>
+                                  ))}
+                                </dl>
+                              ) : null}
+                            </div>
+                          );
+                        })}
+                      </article>
+                    ))
+                  ) : (
+                    <article className="evidence-group empty">
+                      <h3>No evidence yet</h3>
+                      <p>
+                        Retrieval evidence stays separate from the drafting
+                        timeline. Generate or inspect a row to populate this
+                        inspector.
+                      </p>
                     </article>
-                  ))
-                ) : (
-                  <article className="evidence-group empty">
-                    <h3>No evidence yet</h3>
-                    <p>
-                      The answer panel stays separate from retrieved evidence.
-                      Draft a row to populate this panel.
-                    </p>
-                  </article>
-                )}
+                  )}
+                </div>
               </>
             )}
           </section>

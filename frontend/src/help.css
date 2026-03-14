@@ -165,7 +165,7 @@
 
 .help-tag,
 .help-touchpoints code {
-  border-radius: 999px;
+  border-radius: var(--ui-radius);
   background: var(--color-surface-subtle);
   padding: 6px 10px;
   font-size: 0.8rem;
