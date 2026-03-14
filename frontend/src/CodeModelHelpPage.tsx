@@ -1,5 +1,7 @@
 import { useMemo, useState } from "react";
 
+import ThemeToggle from "./ThemeToggle";
+import { useThemePreference } from "./theme";
 import "./styles.css";
 import "./help.css";
 
@@ -153,7 +155,8 @@ const HELP_NODES: HelpNode[] = [
     id: "conversation-state",
     column: "generate",
     eyebrow: "Conversation state",
-    title: "Thread, attempt state, and answer history are deliberately separate",
+    title:
+      "Thread, attempt state, and answer history are deliberately separate",
     summary:
       "A ChatThread can contain messages and retrieval evidence even when no AnswerVersion exists. That is expected lineage, not broken data.",
     bullets: [
@@ -272,21 +275,28 @@ const DIAGRAM_COLUMNS = [
 ];
 
 function CodeModelHelpPage() {
+  const { preference, setPreference } = useThemePreference();
   const [selectedStageId, setSelectedStageId] = useState<string>("generate");
-  const [selectedNodeId, setSelectedNodeId] = useState<string>("answer-generation");
+  const [selectedNodeId, setSelectedNodeId] =
+    useState<string>("answer-generation");
 
   const selectedStage = useMemo(
-    () => HELP_STAGES.find((stage) => stage.id === selectedStageId) ?? HELP_STAGES[0],
+    () =>
+      HELP_STAGES.find((stage) => stage.id === selectedStageId) ??
+      HELP_STAGES[0],
     [selectedStageId],
   );
   const selectedNode = useMemo(
-    () => HELP_NODES.find((node) => node.id === selectedNodeId) ?? HELP_NODES[0],
+    () =>
+      HELP_NODES.find((node) => node.id === selectedNodeId) ?? HELP_NODES[0],
     [selectedNodeId],
   );
 
   function handleStageSelect(stageId: string) {
     setSelectedStageId(stageId);
-    const firstNodeForStage = HELP_NODES.find((node) => node.stageIds.includes(stageId));
+    const firstNodeForStage = HELP_NODES.find((node) =>
+      node.stageIds.includes(stageId),
+    );
     if (firstNodeForStage) {
       setSelectedNodeId(firstNodeForStage.id);
     }
@@ -299,12 +309,18 @@ function CodeModelHelpPage() {
           <p className="eyebrow">Help</p>
           <h1>Conceptual Code Model</h1>
           <p className="help-hero-copy">
-            This page turns the repo&apos;s conceptual model into a navigable flow:
-            source scope, evidence corpora, retrieval snapshot, staged generation,
-            explicit review state, and the lineage layers underneath it all.
+            This page turns the repo&apos;s conceptual model into a navigable
+            flow: source scope, evidence corpora, retrieval snapshot, staged
+            generation, explicit review state, and the lineage layers underneath
+            it all.
           </p>
         </div>
         <div className="help-hero-actions">
+          <ThemeToggle
+            className="help-theme-toggle"
+            preference={preference}
+            onChange={setPreference}
+          />
           <a className="panel-toggle" href="/">
             Back to workspace
           </a>
@@ -319,7 +335,9 @@ function CodeModelHelpPage() {
               key={stage.id}
               type="button"
               className={
-                stage.id === selectedStageId ? "help-stage active" : "help-stage"
+                stage.id === selectedStageId
+                  ? "help-stage active"
+                  : "help-stage"
               }
               onClick={() => handleStageSelect(stage.id)}
             >
@@ -350,28 +368,31 @@ function CodeModelHelpPage() {
                 <div className="help-column-heading">
                   <span>{column.title}</span>
                 </div>
-                {HELP_NODES.filter((node) => node.column === column.id).map((node) => {
-                  const matchesStage = node.stageIds.includes(selectedStageId);
-                  const isActive = node.id === selectedNodeId;
-                  return (
-                    <button
-                      key={node.id}
-                      type="button"
-                      className={
-                        isActive
-                          ? "help-node-card active"
-                          : matchesStage
-                            ? "help-node-card linked"
-                            : "help-node-card"
-                      }
-                      onClick={() => setSelectedNodeId(node.id)}
-                    >
-                      <span>{node.eyebrow}</span>
-                      <strong>{node.title}</strong>
-                      <p>{node.summary}</p>
-                    </button>
-                  );
-                })}
+                {HELP_NODES.filter((node) => node.column === column.id).map(
+                  (node) => {
+                    const matchesStage =
+                      node.stageIds.includes(selectedStageId);
+                    const isActive = node.id === selectedNodeId;
+                    return (
+                      <button
+                        key={node.id}
+                        type="button"
+                        className={
+                          isActive
+                            ? "help-node-card active"
+                            : matchesStage
+                              ? "help-node-card linked"
+                              : "help-node-card"
+                        }
+                        onClick={() => setSelectedNodeId(node.id)}
+                      >
+                        <span>{node.eyebrow}</span>
+                        <strong>{node.title}</strong>
+                        <p>{node.summary}</p>
+                      </button>
+                    );
+                  },
+                )}
               </section>
             ))}
           </div>
@@ -432,9 +453,7 @@ function CodeModelHelpPage() {
           <div className="help-callout-grid">
             <div>
               <strong>Attempt state</strong>
-              <p>
-                What happened in the latest drafting attempt for the row.
-              </p>
+              <p>What happened in the latest drafting attempt for the row.</p>
             </div>
             <div>
               <strong>Answer history</strong>

@@ -14,8 +14,7 @@ import type {
 const API_BASE_URL =
   import.meta.env.VITE_API_BASE_URL ?? "http://127.0.0.1:8000";
 const TENANT_SLUG = import.meta.env.VITE_TENANT_SLUG ?? "local-workspace";
-const USER_EMAIL =
-  import.meta.env.VITE_USER_EMAIL ?? "local.user@example.test";
+const USER_EMAIL = import.meta.env.VITE_USER_EMAIL ?? "local.user@example.test";
 
 function buildHeaders(init?: HeadersInit): HeadersInit {
   return {
@@ -176,16 +175,13 @@ export async function downloadUpload(uploadId: string): Promise<void> {
 export async function requestBulkFill(
   caseId: string,
 ): Promise<BulkFillResponse> {
-  return request<BulkFillResponse>(
-    `/api/cases/${caseId}/bulk-fill`,
-    {
-      method: "POST",
-      body: JSON.stringify({ note: "First-cut bulk-fill placeholder" }),
-      headers: {
-        "Content-Type": "application/json",
-      },
+  return request<BulkFillResponse>(`/api/cases/${caseId}/bulk-fill`, {
+    method: "POST",
+    body: JSON.stringify({ note: "First-cut bulk-fill placeholder" }),
+    headers: {
+      "Content-Type": "application/json",
     },
-  );
+  });
 }
 
 export async function retryFailedBulkFill(

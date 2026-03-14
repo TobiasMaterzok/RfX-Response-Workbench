@@ -39,6 +39,8 @@ import type {
   SessionContext,
   ThreadDetail,
 } from "./types";
+import ThemeToggle from "./ThemeToggle";
+import { useThemePreference } from "./theme";
 import "./styles.css";
 
 type CreateCaseState = {
@@ -152,6 +154,7 @@ function rowVisualState(row: QuestionnaireRow): RowVisualState {
 
 function App() {
   const devPanelsEnabled = import.meta.env.VITE_ENABLE_DEV_PANELS === "true";
+  const { preference, setPreference } = useThemePreference();
   const [session, setSession] = useState<SessionContext | null>(null);
   const [cases, setCases] = useState<CaseSummary[]>([]);
   const [selectedCase, setSelectedCase] = useState<CaseDetail | null>(null);
@@ -178,7 +181,9 @@ function App() {
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [isEvidenceCollapsed, setIsEvidenceCollapsed] = useState(false);
   const [isContextExpanded, setIsContextExpanded] = useState(false);
-  const [chatViewportHeight, setChatViewportHeight] = useState<number | null>(null);
+  const [chatViewportHeight, setChatViewportHeight] = useState<number | null>(
+    null,
+  );
   const activeViewMode: ViewMode = devPanelsEnabled ? viewMode : "workspace";
   const workspaceLoadIdRef = useRef(0);
   const answerPanelRef = useRef<HTMLElement | null>(null);
@@ -190,8 +195,9 @@ function App() {
       return null;
     }
     return (
-      answerVersions.find((version) => version.id === selectedAnswerVersionId) ??
-      null
+      answerVersions.find(
+        (version) => version.id === selectedAnswerVersionId,
+      ) ?? null
     );
   }, [answerVersions, selectedAnswerVersionId]);
 
@@ -319,8 +325,10 @@ function App() {
         attemptState === "answer_available" ||
           (attemptState === "none" && versions.length > 0)
           ? threadResult.status === "fulfilled"
-            ? threadResult.value?.answer_version?.id ?? versions[0]?.id ?? null
-            : versions[0]?.id ?? null
+            ? (threadResult.value?.answer_version?.id ??
+              versions[0]?.id ??
+              null)
+            : (versions[0]?.id ?? null)
           : null,
       );
     },
@@ -406,7 +414,8 @@ function App() {
         setSelectedDevTable(
           (current) =>
             current ??
-            result.tables.find((table) => table.name === "answer_versions")?.name ??
+            result.tables.find((table) => table.name === "answer_versions")
+              ?.name ??
             result.tables[0]?.name ??
             null,
         );
@@ -679,7 +688,13 @@ function App() {
       await downloadUpload(result.zip_download_upload_id);
       const exportDetails =
         result.export_mode === "approved_only"
-          ? [pluralize(result.placeholder_row_count, "placeholder row", "placeholder rows")]
+          ? [
+              pluralize(
+                result.placeholder_row_count,
+                "placeholder row",
+                "placeholder rows",
+              ),
+            ]
           : [
               ...(result.includes_unapproved_drafts ? ["includes drafts"] : []),
               ...(result.placeholder_row_count > 0
@@ -890,7 +905,11 @@ function App() {
   }
 
   return (
-    <div className={isSidebarCollapsed ? "app-shell sidebar-collapsed" : "app-shell"}>
+    <div
+      className={
+        isSidebarCollapsed ? "app-shell sidebar-collapsed" : "app-shell"
+      }
+    >
       <aside className={isSidebarCollapsed ? "sidebar collapsed" : "sidebar"}>
         {isSidebarCollapsed ? (
           <div className="panel-collapsed-shell">
@@ -916,21 +935,28 @@ function App() {
                     : status}
                 </p>
               </div>
-              <div className="sidebar-header-actions">
-                <a
-                  className="panel-toggle sidebar-toggle"
-                  href="/?page=code-model-help"
-                >
-                  Help
-                </a>
-                <button
-                  type="button"
-                  className="panel-toggle sidebar-toggle"
-                  onClick={() => setIsSidebarCollapsed(true)}
-                  aria-label="Collapse RfX RAG Expert sidebar"
-                >
-                  Hide
-                </button>
+              <div className="sidebar-header-controls">
+                <div className="sidebar-header-actions">
+                  <a
+                    className="panel-toggle sidebar-toggle"
+                    href="/?page=code-model-help"
+                  >
+                    Help
+                  </a>
+                  <button
+                    type="button"
+                    className="panel-toggle sidebar-toggle"
+                    onClick={() => setIsSidebarCollapsed(true)}
+                    aria-label="Collapse RfX RAG Expert sidebar"
+                  >
+                    Hide
+                  </button>
+                </div>
+                <ThemeToggle
+                  className="sidebar-theme-toggle"
+                  preference={preference}
+                  onChange={setPreference}
+                />
               </div>
             </div>
 
@@ -1008,7 +1034,9 @@ function App() {
                   required
                 />
                 {formState.pdf ? (
-                  <span className="file-status">PDF loaded: {formState.pdf.name}</span>
+                  <span className="file-status">
+                    PDF loaded: {formState.pdf.name}
+                  </span>
                 ) : null}
               </label>
               <label>
@@ -1041,7 +1069,9 @@ function App() {
                 <button
                   key={item.id}
                   className={
-                    selectedCase?.id === item.id ? "case-card active" : "case-card"
+                    selectedCase?.id === item.id
+                      ? "case-card active"
+                      : "case-card"
                   }
                   onClick={() => {
                     void selectCase(item.id);
@@ -1059,7 +1089,11 @@ function App() {
       </aside>
 
       {activeViewMode === "workspace" ? (
-        <main className={isEvidenceCollapsed ? "workspace evidence-collapsed" : "workspace"}>
+        <main
+          className={
+            isEvidenceCollapsed ? "workspace evidence-collapsed" : "workspace"
+          }
+        >
           <section className="panel case-panel">
             <div className="panel-header">
               <div>
@@ -1101,32 +1135,45 @@ function App() {
                   <span>{selectedCase.latest_bulk_fill.status}</span>
                 </div>
                 <p>
-                  queued {summaryCount(rowExecutionCounts(), "not_started")} · running{" "}
-                  {summaryCount(rowExecutionCounts(), "running")} · drafted{" "}
-                  {summaryCount(rowExecutionCounts(), "drafted")} · failed{" "}
-                  {summaryCount(rowExecutionCounts(), "failed")}
+                  queued {summaryCount(rowExecutionCounts(), "not_started")} ·
+                  running {summaryCount(rowExecutionCounts(), "running")} ·
+                  drafted {summaryCount(rowExecutionCounts(), "drafted")} ·
+                  failed {summaryCount(rowExecutionCounts(), "failed")}
                 </p>
                 <p>
-                  review {summaryCount(reviewCounts(), "needs_review")} · approved{" "}
-                  {summaryCount(reviewCounts(), "approved")} · rejected{" "}
+                  review {summaryCount(reviewCounts(), "needs_review")} ·
+                  approved {summaryCount(reviewCounts(), "approved")} · rejected{" "}
                   {summaryCount(reviewCounts(), "rejected")}
                 </p>
                 <p>
-                  {selectedCase.latest_bulk_fill.execution_mode ?? "unclaimed"} ·{" "}
-                  {selectedCase.latest_bulk_fill.runner_id ?? "no runner"}
+                  {selectedCase.latest_bulk_fill.execution_mode ?? "unclaimed"}{" "}
+                  · {selectedCase.latest_bulk_fill.runner_id ?? "no runner"}
                 </p>
                 {selectedCase.latest_bulk_fill.cancel_requested_at ? (
-                  <p>Cancel requested at {selectedCase.latest_bulk_fill.cancel_requested_at}</p>
+                  <p>
+                    Cancel requested at{" "}
+                    {selectedCase.latest_bulk_fill.cancel_requested_at}
+                  </p>
                 ) : null}
                 {selectedCase.latest_bulk_fill.stale_detected_at ? (
-                  <p>Orphaned/stale at {selectedCase.latest_bulk_fill.stale_detected_at}</p>
+                  <p>
+                    Orphaned/stale at{" "}
+                    {selectedCase.latest_bulk_fill.stale_detected_at}
+                  </p>
                 ) : null}
                 <div className="action-row">
                   <button
                     type="button"
                     className="ghost"
                     onClick={() => void handleRetryFailedBulkFill()}
-                    disabled={!["completed_with_failures", "failed", "cancelled", "orphaned"].includes(selectedCase.latest_bulk_fill.status)}
+                    disabled={
+                      ![
+                        "completed_with_failures",
+                        "failed",
+                        "cancelled",
+                        "orphaned",
+                      ].includes(selectedCase.latest_bulk_fill.status)
+                    }
                   >
                     Retry failed
                   </button>
@@ -1134,7 +1181,14 @@ function App() {
                     type="button"
                     className="ghost"
                     onClick={() => void handleResumeBulkFill()}
-                    disabled={!["completed_with_failures", "failed", "cancelled", "orphaned"].includes(selectedCase.latest_bulk_fill.status)}
+                    disabled={
+                      ![
+                        "completed_with_failures",
+                        "failed",
+                        "cancelled",
+                        "orphaned",
+                      ].includes(selectedCase.latest_bulk_fill.status)
+                    }
                   >
                     Resume
                   </button>
@@ -1142,7 +1196,11 @@ function App() {
                     type="button"
                     className="ghost"
                     onClick={() => void handleCancelBulkFill()}
-                    disabled={!["queued", "running"].includes(selectedCase.latest_bulk_fill.status)}
+                    disabled={
+                      !["queued", "running"].includes(
+                        selectedCase.latest_bulk_fill.status,
+                      )
+                    }
                   >
                     Cancel
                   </button>
@@ -1192,7 +1250,9 @@ function App() {
                 <span>Filter</span>
                 <select
                   value={rowFilter}
-                  onChange={(event) => setRowFilter(event.target.value as RowFilter)}
+                  onChange={(event) =>
+                    setRowFilter(event.target.value as RowFilter)
+                  }
                 >
                   <option value="all">all</option>
                   <option value="not_started">not started</option>
@@ -1223,7 +1283,8 @@ function App() {
                   <small>{row.review_status}</small>
                   {row.last_bulk_fill_status ? (
                     <small>
-                      {row.last_bulk_fill_status} · attempt {row.last_bulk_fill_attempt_number}
+                      {row.last_bulk_fill_status} · attempt{" "}
+                      {row.last_bulk_fill_attempt_number}
                     </small>
                   ) : null}
                 </button>
@@ -1253,7 +1314,9 @@ function App() {
               <div className="question-copy">
                 <div>
                   <h3>Question</h3>
-                  <p>{selectedRow?.question ?? "No questionnaire row selected."}</p>
+                  <p>
+                    {selectedRow?.question ?? "No questionnaire row selected."}
+                  </p>
                 </div>
                 <div className="question-context-block">
                   <h3>Context</h3>
@@ -1270,7 +1333,9 @@ function App() {
                     <button
                       type="button"
                       className="question-context-toggle"
-                      onClick={() => setIsContextExpanded((current) => !current)}
+                      onClick={() =>
+                        setIsContextExpanded((current) => !current)
+                      }
                     >
                       {isContextExpanded ? "Show less" : "Show full context"}
                     </button>
@@ -1280,7 +1345,9 @@ function App() {
               <div className="row-meta-grid">
                 <div className="row-meta-item">
                   <span>Review</span>
-                  <strong>{selectedRow?.review_status ?? "No row selected."}</strong>
+                  <strong>
+                    {selectedRow?.review_status ?? "No row selected."}
+                  </strong>
                 </div>
                 <div className="row-meta-item">
                   <span>Latest attempt</span>
@@ -1321,7 +1388,9 @@ function App() {
                     key={item.id}
                     data-message-visual-state={messageVisualState}
                     className={
-                      item.role === "assistant" ? "message assistant" : "message"
+                      item.role === "assistant"
+                        ? "message assistant"
+                        : "message"
                     }
                   >
                     <span>{item.role}</span>
@@ -1346,7 +1415,9 @@ function App() {
                     onClick={() => void handleReviseAnswer()}
                     disabled={!selectedRow || !message.trim() || isDrafting}
                   >
-                    {isDrafting ? "Waiting for model response..." : "Revise answer"}
+                    {isDrafting
+                      ? "Waiting for model response..."
+                      : "Revise answer"}
                   </button>
                   <div className="action-row">
                     <button
@@ -1389,18 +1460,10 @@ function App() {
                         : "Generate answer"}
                   </button>
                   <div className="action-row">
-                    <button
-                      type="button"
-                      className="ghost"
-                      disabled
-                    >
+                    <button type="button" className="ghost" disabled>
                       Approve selected version
                     </button>
-                    <button
-                      type="button"
-                      className="ghost"
-                      disabled
-                    >
+                    <button type="button" className="ghost" disabled>
                       Reject row
                     </button>
                   </div>
@@ -1489,17 +1552,25 @@ function App() {
                 {inspectedAnswerVersion ? (
                   <>
                     <p className="status-line">
-                      {inspectedAnswerVersion.generation_path.replaceAll("_", " ")} ·{" "}
-                      {inspectedAnswerVersion.llm_capture_stage ?? "no captured stage"} ·{" "}
-                      {inspectedAnswerVersion.llm_capture_status}
+                      {inspectedAnswerVersion.generation_path.replaceAll(
+                        "_",
+                        " ",
+                      )}{" "}
+                      ·{" "}
+                      {inspectedAnswerVersion.llm_capture_stage ??
+                        "no captured stage"}{" "}
+                      · {inspectedAnswerVersion.llm_capture_status}
                     </p>
-                    {inspectedAnswerVersion.llm_capture_status === "captured" ? (
+                    {inspectedAnswerVersion.llm_capture_status ===
+                    "captured" ? (
                       <>
                         <label className="raw-block">
                           <span>Raw render prompt sent to LLM</span>
                           <textarea
                             readOnly
-                            value={inspectedAnswerVersion.llm_request_text ?? ""}
+                            value={
+                              inspectedAnswerVersion.llm_request_text ?? ""
+                            }
                             rows={12}
                           />
                         </label>
@@ -1507,7 +1578,9 @@ function App() {
                           <span>Raw render-stage model response</span>
                           <textarea
                             readOnly
-                            value={inspectedAnswerVersion.llm_response_text ?? ""}
+                            value={
+                              inspectedAnswerVersion.llm_response_text ?? ""
+                            }
                             rows={10}
                           />
                         </label>
@@ -1518,8 +1591,8 @@ function App() {
                       </>
                     ) : (
                       <p className="empty-dev-state">
-                        Render-stage prompt capture is unavailable for this answer
-                        version.
+                        Render-stage prompt capture is unavailable for this
+                        answer version.
                       </p>
                     )}
                   </>
@@ -1568,9 +1641,13 @@ function App() {
                 {threadState?.retrieval ? (
                   <div className="retrieval-summary">
                     <p className="status-line">
-                      {threadState.retrieval.retrieval_action.replaceAll("_", " ")} ·{" "}
-                      {threadState.retrieval.revision_mode.replaceAll("_", " ")} ·{" "}
-                      {threadState.retrieval.sufficiency}
+                      {threadState.retrieval.retrieval_action.replaceAll(
+                        "_",
+                        " ",
+                      )}{" "}
+                      ·{" "}
+                      {threadState.retrieval.revision_mode.replaceAll("_", " ")}{" "}
+                      · {threadState.retrieval.sufficiency}
                       {threadState.retrieval.broadened ? " · broadened" : ""}
                       {threadState.retrieval.degraded ? " · degraded" : ""}
                     </p>
@@ -1603,8 +1680,8 @@ function App() {
                   <article className="evidence-group empty">
                     <h3>No evidence yet</h3>
                     <p>
-                      The answer panel stays separate from retrieved evidence. Draft
-                      a row to populate this panel.
+                      The answer panel stays separate from retrieved evidence.
+                      Draft a row to populate this panel.
                     </p>
                   </article>
                 )}

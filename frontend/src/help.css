@@ -5,13 +5,19 @@
   gap: 18px;
 }
 
+.help-hero-actions {
+  display: grid;
+  gap: 12px;
+  justify-items: end;
+}
+
 .help-hero,
 .help-thesis,
 .help-diagram,
 .help-detail,
 .help-callout-card {
-  background: rgba(255, 252, 246, 0.82);
-  border: 1px solid rgba(20, 34, 31, 0.1);
+  background: var(--color-panel);
+  border: 1px solid var(--color-border);
 }
 
 .help-hero {
@@ -34,7 +40,7 @@
 .help-detail-summary {
   margin: 10px 0 0;
   max-width: 70ch;
-  color: #315448;
+  color: var(--color-text-muted);
   line-height: 1.5;
 }
 
@@ -46,10 +52,10 @@
 }
 
 .help-stage {
-  border: 1px solid rgba(20, 34, 31, 0.12);
+  border: 1px solid var(--color-border);
   border-radius: var(--ui-radius);
   padding: 12px;
-  background: rgba(255, 255, 255, 0.72);
+  background: var(--color-panel);
   text-align: left;
   display: grid;
   gap: 6px;
@@ -62,19 +68,19 @@
   text-transform: uppercase;
   letter-spacing: 0.14em;
   font-size: 0.68rem;
-  color: #6b837c;
+  color: var(--color-text-muted);
 }
 
 .help-stage strong,
 .help-node-card strong {
   font-size: 1rem;
-  color: #14221f;
+  color: var(--color-text);
 }
 
 .help-stage.active,
 .help-node-card.active {
-  outline: 2px solid #d88c4a;
-  background: rgba(216, 140, 74, 0.14);
+  outline: 2px solid var(--color-focus);
+  background: var(--color-accent-soft);
 }
 
 .help-diagram-layout {
@@ -112,14 +118,14 @@
 .help-column-heading {
   padding: 10px 12px;
   border-radius: var(--ui-radius);
-  background: rgba(20, 34, 31, 0.08);
+  background: var(--color-surface-subtle);
 }
 
 .help-node-card {
-  border: 1px solid rgba(20, 34, 31, 0.12);
+  border: 1px solid var(--color-border);
   border-radius: var(--ui-radius);
   padding: 12px;
-  background: rgba(255, 255, 255, 0.74);
+  background: var(--color-panel);
   text-align: left;
   display: grid;
   gap: 6px;
@@ -128,13 +134,13 @@
 }
 
 .help-node-card.linked {
-  border-color: rgba(216, 140, 74, 0.4);
-  background: rgba(216, 140, 74, 0.08);
+  border-color: var(--color-accent);
+  background: var(--color-accent-soft);
 }
 
 .help-node-card p {
   margin: 0;
-  color: #315448;
+  color: var(--color-text-muted);
   line-height: 1.45;
 }
 
@@ -160,7 +166,7 @@
 .help-tag,
 .help-touchpoints code {
   border-radius: 999px;
-  background: rgba(20, 34, 31, 0.08);
+  background: var(--color-surface-subtle);
   padding: 6px 10px;
   font-size: 0.8rem;
 }
@@ -177,7 +183,7 @@
 .help-bullet-list {
   margin: 0;
   padding-left: 1.2rem;
-  color: #315448;
+  color: var(--color-text-muted);
   display: grid;
   gap: 6px;
 }
@@ -201,7 +207,7 @@
 
 .help-callout-grid p {
   margin: 0;
-  color: #315448;
+  color: var(--color-text-muted);
   line-height: 1.45;
 }
 
@@ -213,6 +219,10 @@
   .help-hero,
   .help-diagram-header {
     flex-direction: column;
+  }
+
+  .help-hero-actions {
+    justify-items: stretch;
   }
 
   .help-thesis-flow,
