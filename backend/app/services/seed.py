@@ -37,6 +37,12 @@ from app.services.ai import AIService
 from app.services.case_profiles import persist_historical_case_profile
 from app.services.object_keys import safe_object_key_filename
 from app.services.pdfs import extract_pdf
+from app.services.progress import (
+    ProgressCallback,
+    progress_interval,
+    report_progress,
+    should_report_progress,
+)
 from app.services.reproducibility import (
     assert_execution_run_consistency,
     create_artifact_build,
@@ -61,6 +67,7 @@ def import_historical_corpus(
     pipeline_profile_name: str | None = None,
     pipeline_override: dict[str, object] | None = None,
     reproducibility_mode: ReproducibilityMode = ReproducibilityMode.BEST_EFFORT,
+    progress_callback: ProgressCallback | None = None,
 ) -> HistoricalDataset:
     pipeline = resolve_pipeline_selection(
         settings or get_settings(),
@@ -73,6 +80,17 @@ def import_historical_corpus(
         raise ValidationFailure(f"Historical corpus manifest is missing at {manifest_path}.")
     manifest_payload = manifest_path.read_bytes()
     manifest = json.loads(manifest_payload.decode("utf-8"))
+    clients = list(manifest["clients"])
+    total_clients = len(clients)
+    response_model = pipeline.resolved_pipeline.models.case_profile_extraction.model_id
+    embedding_model = pipeline.resolved_pipeline.indexing.embedding_model
+    report_progress(
+        progress_callback,
+        (
+            "Historical corpus import started "
+            f"clients={total_clients} response_model={response_model} embedding_model={embedding_model}"
+        ),
+    )
     dataset_slug = "sample-historical-corpus"
     existing = session.scalar(
         select(HistoricalDataset).where(
@@ -195,7 +213,13 @@ def import_historical_corpus(
     dataset.creation_run_id = repro.execution_run.id
     dataset.artifact_build_id = build.id
 
-    for client in manifest["clients"]:
+    completed_case_profile_llm_calls = 0
+    completed_row_embeddings = 0
+    for client_index, client in enumerate(clients, start=1):
+        report_progress(
+            progress_callback,
+            f"Processing historical client {client_index}/{total_clients}: slug={client['slug']}",
+        )
         workbook_name = str(client["deliverables"]["qa_xlsx"])
         pdf_name = str(client["deliverables"]["context_pdf"])
         workbook_path = base_path / workbook_name
@@ -213,6 +237,13 @@ def import_historical_corpus(
             source_file_name=workbook_path.name,
             schema_version=HISTORICAL_SCHEMA_VERSION,
             allow_empty_answer=False,
+        )
+        report_progress(
+            progress_callback,
+            (
+                f"Parsed workbook for historical client {client_index}/{total_clients}: "
+                f"slug={client['slug']} rows={len(parsed.rows)}"
+            ),
         )
         workbook_stored = storage.save_bytes(
             object_key=(
@@ -251,6 +282,13 @@ def import_historical_corpus(
 
         pdf_payload = pdf_path.read_bytes()
         extracted_pdf = extract_pdf(pdf_payload)
+        report_progress(
+            progress_callback,
+            (
+                f"Extracted PDF for historical client {client_index}/{total_clients}: "
+                f"slug={client['slug']} pages={len(extracted_pdf.pages)}"
+            ),
+        )
         pdf_stored = storage.save_bytes(
             object_key=(
                 f"historical/{dataset.slug}/"
@@ -283,9 +321,19 @@ def import_historical_corpus(
             page_text=[page.text for page in extracted_pdf.pages],
             repro_context=repro,
             storage=storage,
+            progress_callback=progress_callback,
+        )
+        completed_case_profile_llm_calls += 1
+        report_progress(
+            progress_callback,
+            (
+                "Successful historical case-profile LLM calls "
+                f"{completed_case_profile_llm_calls}/{total_clients}"
+            ),
         )
 
-        for row in parsed.rows:
+        row_progress_every = progress_interval(len(parsed.rows))
+        for row_index, row in enumerate(parsed.rows, start=1):
             language, confidence = infer_language(f"{row.context} {row.question} {row.answer}")
             retrieval_text = f"{row.context}\n{row.question}"
             session.add(
@@ -323,7 +371,31 @@ def import_historical_corpus(
                     ),
                 )
             )
+            completed_row_embeddings += 1
+            if should_report_progress(row_index, len(parsed.rows), every=row_progress_every):
+                report_progress(
+                    progress_callback,
+                    (
+                        f"Embedded historical questionnaire rows for client {client_index}/{total_clients} "
+                        f"slug={client['slug']}: {row_index}/{len(parsed.rows)}"
+                    ),
+                )
+        report_progress(
+            progress_callback,
+            (
+                f"Completed historical client {client_index}/{total_clients}: "
+                f"slug={client['slug']} rows={len(parsed.rows)}"
+            ),
+        )
     session.flush()
+    report_progress(
+        progress_callback,
+        (
+            "Historical corpus import complete "
+            f"clients={total_clients} case_profile_llm_calls={completed_case_profile_llm_calls} "
+            f"row_embeddings={completed_row_embeddings}"
+        ),
+    )
     finish_execution_run(
         repro.execution_run,
         outputs_json={"historical_dataset_id": str(dataset.id), "artifact_build_id": str(build.id)},

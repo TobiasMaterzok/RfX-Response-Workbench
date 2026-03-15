@@ -36,6 +36,12 @@ from app.services.ai import (
     openai_sdk_version,
 )
 from app.services.hashing import sha256_text
+from app.services.progress import (
+    ProgressCallback,
+    progress_interval,
+    report_progress,
+    should_report_progress,
+)
 from app.services.reproducibility import (
     ReproContext,
     canonical_json_text,
@@ -250,7 +256,15 @@ def _persist_case_profile_items[ProfileT: CaseProfile | HistoricalCaseProfile](
     item_artifact_family: str,
     repro_context: ReproContext | None,
     storage,
+    progress_label: str,
+    progress_callback: ProgressCallback | None = None,
 ) -> None:
+    total_items = len(document.analysis_items)
+    report_progress(
+        progress_callback,
+        f"Embedding case-profile analysis items for {progress_label}: total={total_items}",
+    )
+    every = progress_interval(total_items)
     for position, item in enumerate(document.analysis_items, start=1):
         normalized_text = f"{item.prompt}\n{item.answer}"
         embedding = _embed_case_profile_text(
@@ -266,6 +280,11 @@ def _persist_case_profile_items[ProfileT: CaseProfile | HistoricalCaseProfile](
             storage=storage,
         )
         session.add(build_item(profile, item, position, normalized_text, embedding))
+        if should_report_progress(position, total_items, every=every):
+            report_progress(
+                progress_callback,
+                f"Embedded case-profile analysis items for {progress_label}: {position}/{total_items}",
+            )
 
 
 def _persist_generated_case_profile[ProfileT: CaseProfile | HistoricalCaseProfile](
@@ -287,7 +306,10 @@ def _persist_generated_case_profile[ProfileT: CaseProfile | HistoricalCaseProfil
     item_artifact_family: str,
     repro_context: ReproContext | None = None,
     storage=None,
+    progress_label: str,
+    progress_callback: ProgressCallback | None = None,
 ) -> ProfileT:
+    report_progress(progress_callback, f"Starting case-profile LLM extraction for {progress_label}")
     generation = generate_case_profile_document(
         ai_service=ai_service,
         pipeline=pipeline,
@@ -298,6 +320,12 @@ def _persist_generated_case_profile[ProfileT: CaseProfile | HistoricalCaseProfil
         language=language,
         page_text=page_text,
     )
+    resolved_model = generation.actual_model_id or generation.requested_model_id or "unknown"
+    report_progress(
+        progress_callback,
+        f"Completed case-profile LLM extraction for {progress_label}: model={resolved_model}",
+    )
+    report_progress(progress_callback, f"Persisting case-profile document for {progress_label}")
     document = generation.document
     profile = build_profile(document)
     session.add(profile)
@@ -320,8 +348,11 @@ def _persist_generated_case_profile[ProfileT: CaseProfile | HistoricalCaseProfil
         item_artifact_family=item_artifact_family,
         repro_context=repro_context,
         storage=storage,
+        progress_label=progress_label,
+        progress_callback=progress_callback,
     )
     session.flush()
+    report_progress(progress_callback, f"Persisted case-profile artifacts for {progress_label}")
     return profile
 
 
@@ -336,6 +367,7 @@ def persist_case_profile(
     artifact_build_id=None,
     repro_context: ReproContext | None = None,
     storage=None,
+    progress_callback: ProgressCallback | None = None,
 ) -> CaseProfile:
     artifact_hashes = artifact_index_hashes(pipeline)
     page_text = [
@@ -399,6 +431,8 @@ def persist_case_profile(
         item_artifact_family="case_profile_item",
         repro_context=repro_context,
         storage=storage,
+        progress_label=f"live case {case.id}",
+        progress_callback=progress_callback,
     )
     return profile
 
@@ -412,6 +446,7 @@ def persist_historical_case_profile(
     page_text: Sequence[str],
     repro_context: ReproContext | None = None,
     storage=None,
+    progress_callback: ProgressCallback | None = None,
 ) -> HistoricalCaseProfile:
     historical_index_config = historical_index_payload(pipeline.resolved_pipeline)
 
@@ -491,5 +526,7 @@ def persist_historical_case_profile(
         item_artifact_family="historical_case_profile_item",
         repro_context=repro_context,
         storage=storage,
+        progress_label=f"historical client {client_package.client_slug}",
+        progress_callback=progress_callback,
     )
     return profile

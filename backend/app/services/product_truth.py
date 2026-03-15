@@ -26,6 +26,12 @@ from app.pipeline.config import (
 )
 from app.services.ai import AIService
 from app.services.hashing import sha256_text
+from app.services.progress import (
+    ProgressCallback,
+    progress_interval,
+    report_progress,
+    should_report_progress,
+)
 from app.services.reproducibility import (
     assert_execution_run_consistency,
     create_artifact_build,
@@ -170,6 +176,7 @@ def ingest_product_truth_file(
     reproducibility_mode: ReproducibilityMode = ReproducibilityMode.BEST_EFFORT,
     run_kind: ExecutionRunKind = ExecutionRunKind.PRODUCT_TRUTH_IMPORT,
     replaced_build: ArtifactBuild | None = None,
+    progress_callback: ProgressCallback | None = None,
 ) -> list[ProductTruthRecord]:
     payload = path.read_bytes()
     records = load_product_truth_inputs(path)
@@ -185,6 +192,7 @@ def ingest_product_truth_file(
         reproducibility_mode=reproducibility_mode,
         run_kind=run_kind,
         replaced_build=replaced_build,
+        progress_callback=progress_callback,
         source_manifest_json=product_truth_import_manifest(
             path=path,
             payload=payload,
@@ -211,6 +219,7 @@ def ingest_product_truth_inputs(
     reproducibility_mode: ReproducibilityMode = ReproducibilityMode.BEST_EFFORT,
     run_kind: ExecutionRunKind = ExecutionRunKind.PRODUCT_TRUTH_IMPORT,
     replaced_build: ArtifactBuild | None = None,
+    progress_callback: ProgressCallback | None = None,
 ) -> list[ProductTruthRecord]:
     if reproducibility_mode == ReproducibilityMode.STRICT_EVAL and run_kind == ExecutionRunKind.PRODUCT_TRUTH_IMPORT:
         existing_truth = session.scalar(
@@ -227,6 +236,11 @@ def ingest_product_truth_inputs(
         settings or get_settings(),
         profile_name=pipeline_profile_name,
         override=pipeline_override,
+    )
+    embedding_model = pipeline.resolved_pipeline.indexing.embedding_model
+    report_progress(
+        progress_callback,
+        f"Product-truth import started records={len(records)} embedding_model={embedding_model}",
     )
     artifact_hashes = artifact_index_hashes(pipeline)
     source_manifest_json["pipeline_config_hash"] = pipeline.config_hash
@@ -267,8 +281,11 @@ def ingest_product_truth_inputs(
         embedding_model=pipeline.resolved_pipeline.indexing.embedding_model,
         replaced_build=replaced_build,
     )
-    created_records = [
-        ingest_product_truth_record(
+    created_records: list[ProductTruthRecord] = []
+    progress_every = progress_interval(len(records))
+    for index, record in enumerate(records, start=1):
+        created_records.append(
+            ingest_product_truth_record(
             session,
             ai_service=ai_service,
             pipeline_profile_name=pipeline.profile_name,
@@ -280,8 +297,16 @@ def ingest_product_truth_inputs(
             tenant_id=tenant_id,
             payload=record,
         )
-        for record in records
-    ]
+        )
+        if should_report_progress(index, len(records), every=progress_every):
+            report_progress(
+                progress_callback,
+                f"Embedded product-truth records: {index}/{len(records)}",
+            )
+    report_progress(
+        progress_callback,
+        f"Product-truth import complete records={len(created_records)}",
+    )
     finish_execution_run(
         repro.execution_run,
         outputs_json={"artifact_build_id": str(build.id), "record_count": len(created_records)},
@@ -302,12 +327,14 @@ def reimport_product_truth_file(
     pipeline_profile_name: str | None = None,
     pipeline_override: dict[str, object] | None = None,
     reproducibility_mode: ReproducibilityMode = ReproducibilityMode.BEST_EFFORT,
+    progress_callback: ProgressCallback | None = None,
 ) -> list[ProductTruthRecord]:
     replaced_build = session.query(ArtifactBuild).filter(
         ArtifactBuild.kind == ArtifactBuildKind.PRODUCT_TRUTH_CORPUS,
         ArtifactBuild.status == ArtifactBuildStatus.ACTIVE,
         ArtifactBuild.tenant_id == tenant_id,
     ).order_by(ArtifactBuild.created_at.desc()).first()
+    report_progress(progress_callback, "Clearing existing product-truth records before reimport")
     session.execute(delete(ProductTruthChunk).where(ProductTruthChunk.tenant_id == tenant_id))
     session.execute(delete(ProductTruthRecord).where(ProductTruthRecord.tenant_id == tenant_id))
     session.flush()
@@ -323,4 +350,5 @@ def reimport_product_truth_file(
         reproducibility_mode=reproducibility_mode,
         run_kind=ExecutionRunKind.PRODUCT_TRUTH_REIMPORT,
         replaced_build=replaced_build,
+        progress_callback=progress_callback,
     )

@@ -188,6 +188,84 @@ def test_default_pipeline_profile_inherits_model_defaults_from_settings(tmp_path
     assert selection.resolved_pipeline.models.answer_rendering.model_id == "gpt-custom-response"
 
 
+def test_historical_import_reports_progress(
+    session,
+    container,
+    repo_root: Path,
+    settings,
+) -> None:
+    context = ensure_local_identity(session, settings)
+    messages: list[str] = []
+    import_historical_corpus(
+        session,
+        ai_service=StubAIService(),
+        storage=container.storage,
+        tenant_id=context.tenant.id,
+        base_path=seed_data_root(repo_root),
+        settings=settings,
+        progress_callback=messages.append,
+    )
+    assert any("Historical corpus import started" in message for message in messages)
+    assert any("Starting case-profile LLM extraction for historical client" in message for message in messages)
+    assert any("Embedded historical questionnaire rows" in message for message in messages)
+    assert any("Historical corpus import complete" in message for message in messages)
+
+
+def test_product_truth_import_reports_progress(
+    session,
+    container,
+    repo_root: Path,
+    settings,
+) -> None:
+    context = ensure_local_identity(session, settings)
+    messages: list[str] = []
+    ingest_product_truth_file(
+        session,
+        ai_service=StubAIService(),
+        tenant_id=context.tenant.id,
+        path=product_truth_path(repo_root),
+        settings=settings,
+        progress_callback=messages.append,
+    )
+    assert any("Product-truth import started" in message for message in messages)
+    assert any("Embedded product-truth records:" in message for message in messages)
+    assert any("Product-truth import complete" in message for message in messages)
+
+
+def test_create_case_reports_progress(
+    session,
+    container,
+    repo_root: Path,
+    settings,
+) -> None:
+    context = ensure_local_identity(session, settings)
+    messages: list[str] = []
+    create_case_from_uploads(
+        session,
+        storage=container.storage,
+        ai_service=StubAIService(),
+        tenant_id=context.tenant.id,
+        user_id=context.user.id,
+        case_name="Progress Case",
+        client_name="Progress Client",
+        pdf_file_name="context.pdf",
+        pdf_media_type="application/pdf",
+        pdf_payload=sample_pdf_bytes(repo_root),
+        questionnaire_file_name="qa.xlsx",
+        questionnaire_media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        questionnaire_payload=build_questionnaire_payload(
+            [("Context A", "Question A", ""), ("Context B", "Question B", "")]
+        ),
+        settings=settings,
+        progress_callback=messages.append,
+    )
+    assert any("Creating live case with" in message for message in messages)
+    assert any("Embedded current-PDF chunks for case" in message for message in messages)
+    assert any("Starting case-profile LLM extraction for live case" in message for message in messages)
+    assert any("Parsed questionnaire workbook for new case" in message for message in messages)
+    assert any("Created live case" in message for message in messages)
+
+
 def test_pipeline_validation_rejects_unknown_and_unsupported_fields(settings) -> None:
     with pytest.raises(ValidationFailure, match="validation failed"):
         resolve_pipeline_selection(

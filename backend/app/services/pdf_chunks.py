@@ -11,6 +11,12 @@ from app.models.entities import PdfChunk, PdfPage
 from app.pipeline.config import PipelineSelection, artifact_index_hashes
 from app.services.ai import AIService, embedding_model_name
 from app.services.hashing import sha256_text
+from app.services.progress import (
+    ProgressCallback,
+    progress_interval,
+    report_progress,
+    should_report_progress,
+)
 from app.services.reproducibility import ReproContext, embed_text_recorded
 
 PDF_CHUNKER_VERSION_LEGACY = "pdf_chunker.v1"
@@ -314,6 +320,7 @@ def persist_pdf_chunks(
     artifact_build_id=None,
     repro_context: ReproContext | None = None,
     storage=None,
+    progress_callback: ProgressCallback | None = None,
 ) -> list[PdfChunk]:
     embedding_model = (
         pipeline.resolved_pipeline.indexing.embedding_model or embedding_model_name(ai_service)
@@ -329,9 +336,15 @@ def persist_pdf_chunks(
             total_pages=len(pages),
         ),
     )
+    total_chunks = len(chunks)
+    report_progress(
+        progress_callback,
+        f"Prepared current-PDF chunks for case {case_id}: pages={len(pages)} chunks={total_chunks}",
+    )
     artifact_hashes = artifact_index_hashes(pipeline)
     models: list[PdfChunk] = []
-    for chunk in chunks:
+    every = progress_interval(total_chunks)
+    for index, chunk in enumerate(chunks, start=1):
         model = PdfChunk(
             tenant_id=tenant_id,
             case_id=case_id,
@@ -379,5 +392,14 @@ def persist_pdf_chunks(
         )
         session.add(model)
         models.append(model)
+        if should_report_progress(index, total_chunks, every=every):
+            report_progress(
+                progress_callback,
+                f"Embedded current-PDF chunks for case {case_id}: {index}/{total_chunks}",
+            )
     session.flush()
+    report_progress(
+        progress_callback,
+        f"Persisted current-PDF chunks for case {case_id}: {len(models)}",
+    )
     return models

@@ -35,6 +35,7 @@ from app.services.hashing import sha256_hex
 from app.services.object_keys import safe_object_key_filename
 from app.services.pdf_chunks import current_pdf_chunking_version, persist_pdf_chunks
 from app.services.pdfs import extract_pdf
+from app.services.progress import ProgressCallback, report_progress
 from app.services.reproducibility import (
     assert_execution_run_consistency,
     create_artifact_build,
@@ -166,6 +167,7 @@ def create_case_from_uploads(
     pipeline_profile_name: str | None = None,
     pipeline_override: dict[str, object] | None = None,
     reproducibility_mode: ReproducibilityMode = ReproducibilityMode.BEST_EFFORT,
+    progress_callback: ProgressCallback | None = None,
 ) -> RfxCase:
     if not case_name.strip():
         raise ValidationFailure("Case name cannot be empty.")
@@ -174,7 +176,19 @@ def create_case_from_uploads(
         profile_name=pipeline_profile_name,
         override=pipeline_override,
     )
+    report_progress(
+        progress_callback,
+        (
+            "Creating live case with "
+            f"response_model={pipeline.resolved_pipeline.models.case_profile_extraction.model_id} "
+            f"embedding_model={pipeline.resolved_pipeline.indexing.embedding_model}"
+        ),
+    )
     pdf_document = extract_pdf(pdf_payload)
+    report_progress(
+        progress_callback,
+        f"Extracted source PDF for new case: pages={len(pdf_document.pages)} file={pdf_file_name}",
+    )
     language, _ = infer_language(" ".join(page.text for page in pdf_document.pages))
     case = RfxCase(
         tenant_id=tenant_id,
@@ -275,16 +289,25 @@ def create_case_from_uploads(
         current_pdf_build=current_pdf_build,
         case_profile_build=case_profile_build,
         repro_context=repro,
+        progress_callback=progress_callback,
     )
 
     if questionnaire_payload is not None:
         if questionnaire_file_name is None or questionnaire_media_type is None:
             raise ValidationFailure("Questionnaire payload is missing file metadata.")
+        report_progress(
+            progress_callback,
+            f"Parsing questionnaire workbook for new case: file={questionnaire_file_name}",
+        )
         parsed = parse_workbook_bytes(
             questionnaire_payload,
             source_file_name=questionnaire_file_name,
             schema_version=QUESTIONNAIRE_SCHEMA_VERSION,
             allow_empty_answer=True,
+        )
+        report_progress(
+            progress_callback,
+            f"Parsed questionnaire workbook for new case: rows={len(parsed.rows)}",
         )
         questionnaire_upload = _persist_upload(
             session,
@@ -334,6 +357,7 @@ def create_case_from_uploads(
     )
     if reproducibility_mode == ReproducibilityMode.STRICT_EVAL:
         assert_execution_run_consistency(session, run=repro.execution_run)
+    report_progress(progress_callback, f"Created live case {case.id}")
     return case
 
 
@@ -349,7 +373,9 @@ def _persist_case_index_artifacts(
     current_pdf_build: ArtifactBuild,
     case_profile_build: ArtifactBuild,
     repro_context,
+    progress_callback: ProgressCallback | None = None,
 ) -> None:
+    report_progress(progress_callback, f"Building current-PDF index artifacts for case {case.id}")
     persist_pdf_chunks(
         session,
         ai_service=ai_service,
@@ -365,7 +391,9 @@ def _persist_case_index_artifacts(
         artifact_build_id=current_pdf_build.id,
         repro_context=repro_context,
         storage=storage,
+        progress_callback=progress_callback,
     )
+    report_progress(progress_callback, f"Building case-profile artifacts for case {case.id}")
     persist_case_profile(
         session,
         ai_service=ai_service,
@@ -376,7 +404,9 @@ def _persist_case_index_artifacts(
         artifact_build_id=case_profile_build.id,
         repro_context=repro_context,
         storage=storage,
+        progress_callback=progress_callback,
     )
+    report_progress(progress_callback, f"Completed index artifacts for case {case.id}")
 
 
 def _load_upload_payload(
@@ -470,6 +500,7 @@ def rebuild_case_index_artifacts(
     pipeline_override: dict[str, object] | None = None,
     pdf_upload_id=None,
     reproducibility_mode: ReproducibilityMode = ReproducibilityMode.BEST_EFFORT,
+    progress_callback: ProgressCallback | None = None,
 ) -> RfxCase:
     if case.status != CaseStatus.ACTIVE:
         raise ValidationFailure(
@@ -482,9 +513,21 @@ def rebuild_case_index_artifacts(
         pinned_config=case.pipeline_config_json,
         pinned_profile_name=case.pipeline_profile_name,
     )
+    report_progress(
+        progress_callback,
+        (
+            f"Rebuilding case index artifacts for case {case.id} with "
+            f"response_model={pipeline.resolved_pipeline.models.case_profile_extraction.model_id} "
+            f"embedding_model={pipeline.resolved_pipeline.indexing.embedding_model}"
+        ),
+    )
     upload = _require_case_pdf_upload(session, case=case, pdf_upload_id=pdf_upload_id)
     _assert_case_index_rebuild_provenance(session, case=case, upload=upload)
     payload = _load_upload_payload(storage=storage, upload=upload)
+    report_progress(
+        progress_callback,
+        f"Loaded source PDF for case rebuild: case={case.id} file={upload.original_file_name}",
+    )
     source_manifest = get_or_create_source_manifest(
         session,
         tenant_id=case.tenant_id,
@@ -523,6 +566,10 @@ def rebuild_case_index_artifacts(
         },
     )
     pdf_document = extract_pdf(payload)
+    report_progress(
+        progress_callback,
+        f"Extracted source PDF for case rebuild: case={case.id} pages={len(pdf_document.pages)}",
+    )
     pages = [
         PdfPage(
             tenant_id=case.tenant_id,
@@ -570,6 +617,7 @@ def rebuild_case_index_artifacts(
     session.execute(delete(PdfChunk).where(PdfChunk.case_id == case.id))
     session.execute(delete(PdfPage).where(PdfPage.case_id == case.id))
     session.flush()
+    report_progress(progress_callback, f"Cleared prior index artifacts for case {case.id}")
 
     session.add_all(pages)
     session.flush()
@@ -584,6 +632,7 @@ def rebuild_case_index_artifacts(
         current_pdf_build=current_pdf_build,
         case_profile_build=case_profile_build,
         repro_context=repro,
+        progress_callback=progress_callback,
     )
     finish_execution_run(
         repro.execution_run,
@@ -596,6 +645,7 @@ def rebuild_case_index_artifacts(
     if reproducibility_mode == ReproducibilityMode.STRICT_EVAL:
         assert_execution_run_consistency(session, run=repro.execution_run)
     session.flush()
+    report_progress(progress_callback, f"Rebuilt case index artifacts for case {case.id}")
     return case
 
 

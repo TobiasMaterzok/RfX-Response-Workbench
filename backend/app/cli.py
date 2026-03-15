@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import time
+from datetime import datetime
 from pathlib import Path
 from uuid import UUID
 
@@ -23,6 +24,11 @@ from app.services.seed import import_historical_corpus
 
 cli = typer.Typer()
 REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+def _progress_echo(message: str) -> None:
+    timestamp = datetime.now().astimezone().isoformat(timespec="seconds")
+    typer.echo(f"[{timestamp}] [progress] {message}")
 
 
 def _bulk_fill_worker_status_message(container, request_id: UUID) -> str:
@@ -97,6 +103,7 @@ def import_historical_corpus_command(
                 pipeline_profile_name=pipeline_profile,
                 pipeline_override=_load_json_object(pipeline_config_path),
                 reproducibility_mode=reproducibility_mode,
+                progress_callback=_progress_echo,
             )
             session.commit()
             typer.echo(f"Imported dataset={dataset.slug}")
@@ -141,6 +148,7 @@ def import_product_truth_command(
                 pipeline_profile_name=pipeline_profile,
                 pipeline_override=_load_json_object(pipeline_config_path),
                 reproducibility_mode=reproducibility_mode,
+                progress_callback=_progress_echo,
             )
             session.commit()
             typer.echo(f"Imported product truth records={len(records)}")
@@ -178,6 +186,7 @@ def reimport_product_truth_command(
                 pipeline_profile_name=pipeline_profile,
                 pipeline_override=_load_json_object(pipeline_config_path),
                 reproducibility_mode=reproducibility_mode,
+                progress_callback=_progress_echo,
             )
             session.commit()
             typer.echo(f"Reimported product truth records={len(records)}")
@@ -220,6 +229,7 @@ def rebuild_case_index_artifacts_command(
                 pipeline_override=_load_json_object(pipeline_config_path),
                 pdf_upload_id=pdf_upload_id,
                 reproducibility_mode=reproducibility_mode,
+                progress_callback=_progress_echo,
             )
             session.commit()
             typer.echo(f"Rebuilt case index artifacts for case={case.id}")
