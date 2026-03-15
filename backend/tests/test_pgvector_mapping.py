@@ -7,10 +7,11 @@ from app.models.entities import (
     PdfChunk,
     ProductTruthChunk,
 )
+from app.models.vector import EMBEDDING_VECTOR_DIMENSIONS
 
 
 def test_pgvector_backed_columns_expose_cosine_distance_comparator() -> None:
-    probe = [0.0] * 1536
+    probe = [0.0] * EMBEDDING_VECTOR_DIMENSIONS
     expressions = [
         PdfChunk.embedding.cosine_distance(probe),
         HistoricalQARow.embedding.cosine_distance(probe),

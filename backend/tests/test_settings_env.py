@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 
 from app import config as config_module
 from app.config import build_settings, clear_settings_cache, get_settings
-from app.services.ai import llm_provider_name_from_settings
+from app.services.ai import OpenAIAIService, llm_provider_name_from_settings
 
 
 def test_get_settings_reads_root_env_file(monkeypatch, tmp_path: Path) -> None:
@@ -17,6 +18,7 @@ def test_get_settings_reads_root_env_file(monkeypatch, tmp_path: Path) -> None:
                 "LLM_API_KEY=dotenv-key",
                 "LLM_API_BASE_URL=https://example-resource.openai.azure.com/openai/v1/",
                 "RFX_OPENAI_RESPONSE_MODEL=gpt-5.2",
+                "RFX_OPENAI_EMBEDDING_DIMENSIONS=1536",
             ]
         )
         + "\n",
@@ -30,6 +32,7 @@ def test_get_settings_reads_root_env_file(monkeypatch, tmp_path: Path) -> None:
     assert settings.llm_api_key == "dotenv-key"
     assert settings.openai_api_key == "dotenv-key"
     assert settings.llm_api_base_url == "https://example-resource.openai.azure.com/openai/v1/"
+    assert settings.openai_embedding_dimensions == 1536
     assert llm_provider_name_from_settings(settings) == "azure_openai"
 
 
@@ -81,9 +84,11 @@ def test_build_settings_accepts_direct_llm_overrides() -> None:
         env_file=None,
         llm_api_key="direct-key",
         llm_api_base_url="https://example-resource.openai.azure.com/openai/v1/",
+        openai_embedding_dimensions=1536,
     )
     assert settings.llm_api_key == "direct-key"
     assert settings.llm_api_base_url == "https://example-resource.openai.azure.com/openai/v1/"
+    assert settings.openai_embedding_dimensions == 1536
 
 
 def test_build_settings_with_env_file_none_is_hermetic(monkeypatch, tmp_path: Path) -> None:
@@ -96,3 +101,33 @@ def test_build_settings_with_env_file_none_is_hermetic(monkeypatch, tmp_path: Pa
     clear_settings_cache()
     settings = build_settings(env_file=None)
     assert settings.database_url.endswith("/rfx_rag_expert")
+
+
+def test_openai_ai_service_passes_embedding_dimensions_to_client() -> None:
+    settings = build_settings(
+        env_file=None,
+        llm_api_key="direct-key",
+        llm_api_base_url="https://example-resource.openai.azure.com/openai/v1/",
+        openai_embedding_model="azure-embedding-deployment",
+        openai_embedding_dimensions=1536,
+    )
+    ai_service = OpenAIAIService(settings)
+    calls: list[dict[str, object]] = []
+
+    def _create(**kwargs):
+        calls.append(kwargs)
+        return SimpleNamespace(
+            data=[SimpleNamespace(embedding=[0.1] * 1536)]
+        )
+
+    ai_service._client = SimpleNamespace(embeddings=SimpleNamespace(create=_create))
+    vector = ai_service.embed_text("hello world")
+    assert len(vector) == 1536
+    assert vector[:3] == [0.1, 0.1, 0.1]
+    assert calls == [
+        {
+            "model": "azure-embedding-deployment",
+            "input": "hello world",
+            "dimensions": 1536,
+        }
+    ]

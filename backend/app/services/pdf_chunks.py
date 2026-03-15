@@ -367,6 +367,7 @@ def persist_pdf_chunks(
                     ai_service=ai_service,
                     text=chunk.content,
                     model_id=pipeline.resolved_pipeline.indexing.embedding_model,
+                    dimensions=pipeline.resolved_pipeline.indexing.embedding_dimensions,
                     tokenizer_identity=(
                         pipeline.resolved_pipeline.indexing.embedding_model
                         if pipeline.resolved_pipeline.indexing.current_pdf.chunk_unit == "token"
@@ -387,6 +388,7 @@ def persist_pdf_chunks(
                 else ai_service.embed_text(
                     chunk.content,
                     model_id=pipeline.resolved_pipeline.indexing.embedding_model,
+                    dimensions=pipeline.resolved_pipeline.indexing.embedding_dimensions,
                 )
             ),
         )

@@ -234,11 +234,13 @@ def _embed_case_profile_text(
             ai_service=ai_service,
             text=text,
             model_id=pipeline.resolved_pipeline.indexing.embedding_model,
+            dimensions=pipeline.resolved_pipeline.indexing.embedding_dimensions,
             metadata_json=metadata_json,
         )
     return ai_service.embed_text(
         text,
         model_id=pipeline.resolved_pipeline.indexing.embedding_model,
+        dimensions=pipeline.resolved_pipeline.indexing.embedding_dimensions,
     )
 
 

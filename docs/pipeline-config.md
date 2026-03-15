@@ -40,7 +40,7 @@ If no config is supplied, the repo resolves the committed `default` profile and 
 
 Current default behavior includes:
 
-- index with the runtime default embedding model from settings
+- index with the runtime default embedding model and embedding dimensions from settings
 - case-profile extraction defaults to `RFX_OPENAI_RESPONSE_MODEL` from settings with `low` reasoning effort
 - answer planning defaults to `RFX_OPENAI_RESPONSE_MODEL` from settings with `low` reasoning effort
 - answer rendering defaults to `RFX_OPENAI_RESPONSE_MODEL` from settings with `low` reasoning effort
@@ -67,6 +67,7 @@ This distinction is enforced.
 These settings affect persisted/indexed artifacts and therefore require explicit import/rebuild when changed:
 
 - `indexing.embedding_model`
+- `indexing.embedding_dimensions`
 - `indexing.current_pdf.*`
 - `indexing.historical.signature_mode`
 - `models.case_profile_extraction.*`
@@ -93,6 +94,7 @@ These knobs are wired today and have real effect.
 ### Index-time
 
 - `indexing.embedding_model`
+- `indexing.embedding_dimensions`
 - `indexing.current_pdf.chunk_unit`
 - `indexing.current_pdf.chunk_size`
 - `indexing.current_pdf.chunk_overlap`
@@ -208,17 +210,17 @@ Default behavior remains `chunk_unit=legacy_char` and `contextualize_chunks=fals
 
 The repo keeps the full selected `index_config_hash` for case/job provenance, but compatibility checks use artifact-relevant hashes:
 
-- live case PDF chunks: `embedding_model + current_pdf`
-- live case-profile artifacts: `embedding_model + case_profile_extraction`
-- historical corpus artifacts: `embedding_model + historical + case_profile_extraction`
-- product-truth artifacts: `embedding_model`
+- live case PDF chunks: `embedding_model + embedding_dimensions + current_pdf`
+- live case-profile artifacts: `embedding_model + embedding_dimensions + case_profile_extraction`
+- historical corpus artifacts: `embedding_model + embedding_dimensions + historical + case_profile_extraction`
+- product-truth artifacts: `embedding_model + embedding_dimensions`
 
 This prevents unrelated sweeps, such as current-PDF chunking changes, from forcing unnecessary historical or product-truth rebuilds.
 
 Embedding-model lineage remains intentionally coupled across artifact families:
 
-- the relevant compatibility hash for every semantic corpus still includes `embedding_model`
-- changing `embedding_model` requires rebuilding/reimporting all semantic corpora
+- the relevant compatibility hash for every semantic corpus still includes `embedding_model` and `embedding_dimensions`
+- changing `embedding_model` or `embedding_dimensions` requires rebuilding/reimporting all semantic corpora
 - retrieval ranks candidates within each corpus and applies per-corpus quotas before assembling the final evidence pack; it does not treat all corpus scores as one unrestricted global nearest-neighbor pool
 
 ## Intentionally omitted for now
@@ -597,7 +599,7 @@ If you change any index-time config, you must rebuild or reimport the affected a
 
 Examples:
 
-- changing `indexing.embedding_model` requires regenerating case PDF chunks, live case profiles, historical case signatures, historical row embeddings, and product-truth embeddings
+- changing `indexing.embedding_model` or `indexing.embedding_dimensions` requires regenerating case PDF chunks, live case profiles, historical case signatures, historical row embeddings, and product-truth embeddings
 - changing `indexing.historical.signature_mode` requires reimporting historical packages/case signatures
 - changing current-PDF chunking settings requires rebuilding the live case index artifacts
 - re-running `import-historical-corpus` is the explicit historical reimport path

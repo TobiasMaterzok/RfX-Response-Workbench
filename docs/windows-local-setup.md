@@ -60,6 +60,14 @@ Edit the repo-root `.env` and set at least:
 - `RFX_STORAGE_ROOT`
 - `LLM_API_KEY`
 
+Optional model values:
+
+- `RFX_OPENAI_RESPONSE_MODEL`
+- `RFX_OPENAI_EMBEDDING_MODEL`
+- `RFX_OPENAI_EMBEDDING_DIMENSIONS`
+
+Keep `RFX_OPENAI_EMBEDDING_DIMENSIONS=1536` with the current pgvector schema, including when using `text-embedding-3-large`.
+
 Then initialize the local database and identity:
 
 ```powershell

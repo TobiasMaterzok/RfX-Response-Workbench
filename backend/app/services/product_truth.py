@@ -146,6 +146,11 @@ def ingest_product_truth_record(
                     ai_service=ai_service,
                     text=payload.body,
                     model_id=str(index_config_json["embedding_model"]),
+                    dimensions=(
+                        int(index_config_json["embedding_dimensions"])
+                        if index_config_json.get("embedding_dimensions") is not None
+                        else None
+                    ),
                     metadata_json={
                         "artifact_family": "product_truth_chunk",
                         "truth_record_id": str(record.id),
@@ -155,6 +160,11 @@ def ingest_product_truth_record(
                 else ai_service.embed_text(
                     payload.body,
                     model_id=str(index_config_json["embedding_model"]),
+                    dimensions=(
+                        int(index_config_json["embedding_dimensions"])
+                        if index_config_json.get("embedding_dimensions") is not None
+                        else None
+                    ),
                 )
             ),
         )
@@ -231,16 +241,21 @@ def ingest_product_truth_inputs(
         if existing_truth is not None:
             raise ValidationFailure(
                 "strict_eval forbids additive product-truth import when approved truth records already exist. Use reimport-product-truth instead."
-            )
+    )
     pipeline = resolve_pipeline_selection(
         settings or get_settings(),
         profile_name=pipeline_profile_name,
         override=pipeline_override,
     )
     embedding_model = pipeline.resolved_pipeline.indexing.embedding_model
+    embedding_dimensions = pipeline.resolved_pipeline.indexing.embedding_dimensions
     report_progress(
         progress_callback,
-        f"Product-truth import started records={len(records)} embedding_model={embedding_model}",
+        (
+            "Product-truth import started "
+            f"records={len(records)} embedding_model={embedding_model} "
+            f"embedding_dimensions={embedding_dimensions}"
+        ),
     )
     artifact_hashes = artifact_index_hashes(pipeline)
     source_manifest_json["pipeline_config_hash"] = pipeline.config_hash
@@ -286,17 +301,17 @@ def ingest_product_truth_inputs(
     for index, record in enumerate(records, start=1):
         created_records.append(
             ingest_product_truth_record(
-            session,
-            ai_service=ai_service,
-            pipeline_profile_name=pipeline.profile_name,
-            index_config_json=product_truth_index_payload(pipeline.resolved_pipeline),
-            index_config_hash=artifact_hashes.product_truth,
-            artifact_build_id=build.id,
-            execution_run=repro.execution_run,
-            storage=storage,
-            tenant_id=tenant_id,
-            payload=record,
-        )
+                session,
+                ai_service=ai_service,
+                pipeline_profile_name=pipeline.profile_name,
+                index_config_json=product_truth_index_payload(pipeline.resolved_pipeline),
+                index_config_hash=artifact_hashes.product_truth,
+                artifact_build_id=build.id,
+                execution_run=repro.execution_run,
+                storage=storage,
+                tenant_id=tenant_id,
+                payload=record,
+            )
         )
         if should_report_progress(index, len(records), every=progress_every):
             report_progress(

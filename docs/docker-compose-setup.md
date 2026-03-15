@@ -34,6 +34,7 @@ Optional values reused by the containers:
 - `LLM_API_BASE_URL`
 - `RFX_OPENAI_RESPONSE_MODEL`
 - `RFX_OPENAI_EMBEDDING_MODEL`
+- `RFX_OPENAI_EMBEDDING_DIMENSIONS`
 - `RFX_LOCAL_TENANT_SLUG`
 - `RFX_LOCAL_TENANT_NAME`
 - `RFX_LOCAL_USER_EMAIL`
@@ -44,7 +45,7 @@ Optional values reused by the containers:
 - `VITE_ENABLE_DEV_PANELS`
 
 Compose pins container-safe defaults for the database and storage paths, so the host-oriented `RFX_DATABASE_URL` and `RFX_STORAGE_ROOT` values in `.env` are ignored by this stack.
-Legacy `OPENAI_API_KEY` and `OPENAI_BASE_URL` aliases are still accepted. For Azure OpenAI, set `LLM_API_BASE_URL=https://YOUR_RESOURCE_NAME.openai.azure.com/openai/v1/` and use your Azure deployment names in `RFX_OPENAI_RESPONSE_MODEL` and `RFX_OPENAI_EMBEDDING_MODEL`.
+Legacy `OPENAI_API_KEY` and `OPENAI_BASE_URL` aliases are still accepted. For Azure OpenAI, set `LLM_API_BASE_URL=https://YOUR_RESOURCE_NAME.openai.azure.com/openai/v1/` and use your Azure deployment names in `RFX_OPENAI_RESPONSE_MODEL` and `RFX_OPENAI_EMBEDDING_MODEL`. Keep `RFX_OPENAI_EMBEDDING_DIMENSIONS=1536` with the current repo schema, including when using `text-embedding-3-large`.
 
 ## 2. Start the app
 

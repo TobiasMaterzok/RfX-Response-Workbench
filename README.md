@@ -77,6 +77,14 @@ Edit the generated config files and set at least these repo-root `.env` values:
 - `RFX_STORAGE_ROOT`
 - `LLM_API_KEY`
 
+Optional model values:
+
+- `RFX_OPENAI_RESPONSE_MODEL`
+- `RFX_OPENAI_EMBEDDING_MODEL`
+- `RFX_OPENAI_EMBEDDING_DIMENSIONS`
+
+Keep `RFX_OPENAI_EMBEDDING_DIMENSIONS=1536` with the current pgvector schema, including when using `text-embedding-3-large`.
+
 The backend, Alembic, and CLI commands read the repo-root `.env` automatically.
 
 ### 3. Initialize the database and local identity

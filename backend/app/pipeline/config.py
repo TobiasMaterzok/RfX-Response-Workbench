@@ -10,6 +10,7 @@ from pydantic import AliasChoices, BaseModel, ConfigDict, Field, ValidationError
 
 from app.config import Settings
 from app.exceptions import ValidationFailure
+from app.models.vector import EMBEDDING_VECTOR_DIMENSIONS
 from app.prompts.case_profile import CASE_PROFILE_PROMPT_SET_VERSION, CASE_PROFILE_SCHEMA_VERSION
 from app.services.hashing import sha256_text
 
@@ -65,6 +66,7 @@ class IndexingConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     embedding_model: str | None
+    embedding_dimensions: int | None = Field(default=None, gt=0)
     current_pdf: CurrentPdfIndexingConfig
     historical: HistoricalIndexingConfig
 
@@ -275,6 +277,14 @@ def _resolve_models(config: PipelineConfig, settings: Settings) -> PipelineConfi
     resolved = config.model_copy(deep=True)
     if resolved.indexing.embedding_model is None:
         resolved.indexing.embedding_model = settings.openai_embedding_model
+    if resolved.indexing.embedding_dimensions is None:
+        resolved.indexing.embedding_dimensions = settings.openai_embedding_dimensions
+    if resolved.indexing.embedding_dimensions != EMBEDDING_VECTOR_DIMENSIONS:
+        raise ValidationFailure(
+            "Pipeline config validation failed: this repo stores embeddings at fixed dimension "
+            f"{EMBEDDING_VECTOR_DIMENSIONS}. Set indexing.embedding_dimensions or "
+            f"RFX_OPENAI_EMBEDDING_DIMENSIONS to {EMBEDDING_VECTOR_DIMENSIONS}."
+        )
     legacy_model_id = resolved.generation.model_id
     legacy_reasoning = resolved.generation.reasoning_effort
     rendering_stage = resolved.models.answer_rendering
@@ -327,6 +337,7 @@ def current_pdf_index_payload(config: PipelineConfig) -> dict[str, object]:
     indexing = config.model_dump(mode="json")["indexing"]
     return {
         "embedding_model": indexing["embedding_model"],
+        "embedding_dimensions": indexing["embedding_dimensions"],
         "current_pdf": indexing["current_pdf"],
     }
 
@@ -336,6 +347,7 @@ def case_profile_index_payload(config: PipelineConfig) -> dict[str, object]:
     models = config.model_dump(mode="json")["models"]
     return {
         "embedding_model": indexing["embedding_model"],
+        "embedding_dimensions": indexing["embedding_dimensions"],
         "case_profile_extraction": models["case_profile_extraction"],
     }
 
@@ -345,6 +357,7 @@ def historical_index_payload(config: PipelineConfig) -> dict[str, object]:
     models = config.model_dump(mode="json")["models"]
     return {
         "embedding_model": indexing["embedding_model"],
+        "embedding_dimensions": indexing["embedding_dimensions"],
         "historical": indexing["historical"],
         "case_profile_extraction": models["case_profile_extraction"],
     }
@@ -354,6 +367,7 @@ def product_truth_index_payload(config: PipelineConfig) -> dict[str, object]:
     indexing = config.model_dump(mode="json")["indexing"]
     return {
         "embedding_model": indexing["embedding_model"],
+        "embedding_dimensions": indexing["embedding_dimensions"],
     }
 
 

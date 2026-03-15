@@ -181,7 +181,8 @@ def create_case_from_uploads(
         (
             "Creating live case with "
             f"response_model={pipeline.resolved_pipeline.models.case_profile_extraction.model_id} "
-            f"embedding_model={pipeline.resolved_pipeline.indexing.embedding_model}"
+            f"embedding_model={pipeline.resolved_pipeline.indexing.embedding_model} "
+            f"embedding_dimensions={pipeline.resolved_pipeline.indexing.embedding_dimensions}"
         ),
     )
     pdf_document = extract_pdf(pdf_payload)
@@ -518,7 +519,8 @@ def rebuild_case_index_artifacts(
         (
             f"Rebuilding case index artifacts for case {case.id} with "
             f"response_model={pipeline.resolved_pipeline.models.case_profile_extraction.model_id} "
-            f"embedding_model={pipeline.resolved_pipeline.indexing.embedding_model}"
+            f"embedding_model={pipeline.resolved_pipeline.indexing.embedding_model} "
+            f"embedding_dimensions={pipeline.resolved_pipeline.indexing.embedding_dimensions}"
         ),
     )
     upload = _require_case_pdf_upload(session, case=case, pdf_upload_id=pdf_upload_id)

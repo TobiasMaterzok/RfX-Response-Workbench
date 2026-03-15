@@ -212,7 +212,13 @@ class SlowDraftAIService(StubAIService):
 
 
 class FailingEmbeddingAIService(StubAIService):
-    def embed_text(self, text: str, *, model_id: str | None = None) -> list[float]:
+    def embed_text(
+        self,
+        text: str,
+        *,
+        model_id: str | None = None,
+        dimensions: int | None = None,
+    ) -> list[float]:
         raise ValidationFailure("Embedding generation failed for testing.")
 
 

@@ -171,8 +171,10 @@ def _env_fingerprint(settings: Settings) -> dict[str, object]:
         "llm_api_base_url": settings.llm_api_base_url,
         "llm_response_model": settings.openai_response_model,
         "llm_embedding_model": settings.openai_embedding_model,
+        "llm_embedding_dimensions": settings.openai_embedding_dimensions,
         "openai_response_model": settings.openai_response_model,
         "openai_embedding_model": settings.openai_embedding_model,
+        "openai_embedding_dimensions": settings.openai_embedding_dimensions,
         "storage_root": str(settings.storage_root.resolve()),
     }
 
@@ -695,13 +697,14 @@ def embed_text_recorded(
     ai_service,
     text: str,
     model_id: str | None,
+    dimensions: int | None,
     tokenizer_identity: str | None = None,
     tokenizer_version: str | None = None,
     metadata_json: dict[str, object] | None = None,
 ) -> list[float]:
     from app.services.ai import llm_provider_name
 
-    vector = ai_service.embed_text(text, model_id=model_id)
+    vector = ai_service.embed_text(text, model_id=model_id, dimensions=dimensions)
     provider_name = llm_provider_name(ai_service)
     record_model_invocation(
         session,
@@ -717,7 +720,7 @@ def embed_text_recorded(
         embedding_model_id=model_id,
         tokenizer_identity=tokenizer_identity,
         tokenizer_version=tokenizer_version,
-        request_payload={"input": text},
+        request_payload={"input": text, "dimensions": dimensions},
         response_payload={"embedding": vector},
         provider_response_id=None,
         sdk_version=importlib.metadata.version("openai") if provider_name != "stub" else None,
@@ -734,13 +737,14 @@ def embed_text_with_invocation_recorded(
     ai_service,
     text: str,
     model_id: str | None,
+    dimensions: int | None,
     tokenizer_identity: str | None = None,
     tokenizer_version: str | None = None,
     metadata_json: dict[str, object] | None = None,
 ) -> tuple[list[float], ModelInvocation]:
     from app.services.ai import llm_provider_name
 
-    vector = ai_service.embed_text(text, model_id=model_id)
+    vector = ai_service.embed_text(text, model_id=model_id, dimensions=dimensions)
     provider_name = llm_provider_name(ai_service)
     invocation = record_model_invocation(
         session,
@@ -756,7 +760,7 @@ def embed_text_with_invocation_recorded(
         embedding_model_id=model_id,
         tokenizer_identity=tokenizer_identity,
         tokenizer_version=tokenizer_version,
-        request_payload={"input": text},
+        request_payload={"input": text, "dimensions": dimensions},
         response_payload={"embedding": vector},
         provider_response_id=None,
         sdk_version=importlib.metadata.version("openai") if provider_name != "stub" else None,

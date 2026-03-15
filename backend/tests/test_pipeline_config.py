@@ -153,6 +153,7 @@ def test_default_pipeline_profile_is_committed_and_resolved(settings) -> None:
     assert selection.resolved_pipeline.indexing.current_pdf.chunk_unit == "legacy_char"
     assert selection.resolved_pipeline.indexing.current_pdf.chunk_size == 900
     assert selection.resolved_pipeline.indexing.embedding_model == settings.openai_embedding_model
+    assert selection.resolved_pipeline.indexing.embedding_dimensions == settings.openai_embedding_dimensions
     assert settings.openai_response_model == "gpt-5.2"
     assert selection.resolved_pipeline.models.case_profile_extraction.model_id == settings.openai_response_model
     assert selection.resolved_pipeline.models.case_profile_extraction.reasoning_effort == "low"
@@ -183,6 +184,7 @@ def test_default_pipeline_profile_inherits_model_defaults_from_settings(tmp_path
     )
     selection = resolve_pipeline_selection(settings)
     assert selection.resolved_pipeline.indexing.embedding_model == "text-embedding-custom"
+    assert selection.resolved_pipeline.indexing.embedding_dimensions == settings.openai_embedding_dimensions
     assert selection.resolved_pipeline.models.case_profile_extraction.model_id == "gpt-custom-response"
     assert selection.resolved_pipeline.models.answer_planning.model_id == "gpt-custom-response"
     assert selection.resolved_pipeline.models.answer_rendering.model_id == "gpt-custom-response"
@@ -281,6 +283,11 @@ def test_pipeline_validation_rejects_unknown_and_unsupported_fields(settings) ->
         resolve_pipeline_selection(
             settings,
             override={"retrieval": {"broadening": {"max_stages": 2}}},
+        )
+    with pytest.raises(ValidationFailure, match="fixed dimension 1536"):
+        resolve_pipeline_selection(
+            settings,
+            override={"indexing": {"embedding_dimensions": 3072}},
         )
     with pytest.raises(ValidationFailure, match="conflicts with models.answer_rendering.model_id"):
         resolve_pipeline_selection(

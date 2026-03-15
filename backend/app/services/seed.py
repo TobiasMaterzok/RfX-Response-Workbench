@@ -84,11 +84,13 @@ def import_historical_corpus(
     total_clients = len(clients)
     response_model = pipeline.resolved_pipeline.models.case_profile_extraction.model_id
     embedding_model = pipeline.resolved_pipeline.indexing.embedding_model
+    embedding_dimensions = pipeline.resolved_pipeline.indexing.embedding_dimensions
     report_progress(
         progress_callback,
         (
             "Historical corpus import started "
-            f"clients={total_clients} response_model={response_model} embedding_model={embedding_model}"
+            f"clients={total_clients} response_model={response_model} "
+            f"embedding_model={embedding_model} embedding_dimensions={embedding_dimensions}"
         ),
     )
     dataset_slug = "sample-historical-corpus"
@@ -364,6 +366,7 @@ def import_historical_corpus(
                         ai_service=ai_service,
                         text=retrieval_text,
                         model_id=pipeline.resolved_pipeline.indexing.embedding_model,
+                        dimensions=pipeline.resolved_pipeline.indexing.embedding_dimensions,
                         metadata_json={
                             "artifact_family": "historical_qa_row",
                             "source_row_id": row.source_row_id,

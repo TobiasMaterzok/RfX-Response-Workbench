@@ -8,6 +8,8 @@ from typing import Any, Final, cast
 from pydantic import AliasChoices, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from app.models.vector import EMBEDDING_VECTOR_DIMENSIONS
+
 REPO_ROOT: Final[Path] = Path(__file__).resolve().parents[2]
 ROOT_ENV_FILE: Final[Path] = REPO_ROOT / ".env"
 USE_ROOT_ENV_FILE: Final[object] = object()
@@ -34,6 +36,7 @@ class Settings(BaseSettings):
     )
     openai_response_model: str = "gpt-5.2"
     openai_embedding_model: str = "text-embedding-3-small"
+    openai_embedding_dimensions: int = EMBEDDING_VECTOR_DIMENSIONS
     local_tenant_slug: str = "local-workspace"
     local_tenant_name: str = "Local Workspace"
     local_user_email: str = "local.user@example.test"
@@ -44,6 +47,13 @@ class Settings(BaseSettings):
     def _blank_string_to_none(cls, value: object) -> object:
         if isinstance(value, str) and not value.strip():
             return None
+        return value
+
+    @field_validator("openai_embedding_dimensions", mode="before")
+    @classmethod
+    def _blank_embedding_dimensions_uses_default(cls, value: object) -> object:
+        if isinstance(value, str) and not value.strip():
+            return EMBEDDING_VECTOR_DIMENSIONS
         return value
 
     @model_validator(mode="after")

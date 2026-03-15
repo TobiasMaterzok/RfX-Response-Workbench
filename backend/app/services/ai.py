@@ -186,7 +186,13 @@ def _extract_historical_product_mentions(items: list[NormalizedEvidenceItem]) ->
 
 
 class AIService(Protocol):
-    def embed_text(self, text: str, *, model_id: str | None = None) -> list[float]:
+    def embed_text(
+        self,
+        text: str,
+        *,
+        model_id: str | None = None,
+        dimensions: int | None = None,
+    ) -> list[float]:
         raise NotImplementedError
 
     def generate_case_profile(
@@ -253,13 +259,31 @@ class OpenAIAIService:
             )
         return self._client
 
-    def embed_text(self, text: str, *, model_id: str | None = None) -> list[float]:
+    def embed_text(
+        self,
+        text: str,
+        *,
+        model_id: str | None = None,
+        dimensions: int | None = None,
+    ) -> list[float]:
         client = self._require_client()
-        response = client.embeddings.create(
-            model=model_id or self._settings.openai_embedding_model,
-            input=text,
+        response_kwargs: dict[str, object] = {
+            "model": model_id or self._settings.openai_embedding_model,
+            "input": text,
+        }
+        requested_dimensions = (
+            self._settings.openai_embedding_dimensions if dimensions is None else dimensions
         )
-        return [float(value) for value in response.data[0].embedding]
+        if requested_dimensions is not None:
+            response_kwargs["dimensions"] = requested_dimensions
+        response = client.embeddings.create(**response_kwargs)
+        vector = [float(value) for value in response.data[0].embedding]
+        if requested_dimensions is not None and len(vector) != requested_dimensions:
+            raise ValidationFailure(
+                "The configured LLM provider returned an embedding with unexpected dimensions: "
+                f"requested {requested_dimensions}, received {len(vector)}."
+            )
+        return vector
 
     def generate_case_profile(
         self,
@@ -417,11 +441,19 @@ class OpenAIAIService:
 
 
 class StubAIService:
-    def embed_text(self, text: str, *, model_id: str | None = None) -> list[float]:
+    def embed_text(
+        self,
+        text: str,
+        *,
+        model_id: str | None = None,
+        dimensions: int | None = None,
+    ) -> list[float]:
         default_model_id = get_settings().openai_embedding_model
         salted_text = text
         if model_id is not None and model_id not in {default_model_id, "stub-ai-service"}:
             salted_text = f"{model_id}::{text}"
+        if dimensions is not None:
+            salted_text = f"{salted_text}::dims={dimensions}"
         value = sum(ord(character) for character in salted_text)
         return [float(value % 1000), float((value // 3) % 1000), float((value // 7) % 1000)]
 

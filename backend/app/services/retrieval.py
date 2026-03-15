@@ -405,6 +405,7 @@ def _build_query_embeddings(
             ai_service=ai_service,
             text=text,
             model_id=request.pipeline.resolved_pipeline.indexing.embedding_model,
+            dimensions=request.pipeline.resolved_pipeline.indexing.embedding_dimensions,
             metadata_json={"retrieval_query_feature": key},
         )
         embeddings[key] = vector

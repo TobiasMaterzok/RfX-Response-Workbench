@@ -2,6 +2,7 @@
   "pipeline_version": "rfx_pipeline.v1",
   "indexing": {
     "embedding_model": null,
+    "embedding_dimensions": null,
     "current_pdf": {
       "chunk_unit": "legacy_char",
       "chunk_size": 900,
