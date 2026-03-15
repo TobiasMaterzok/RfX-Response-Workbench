@@ -1,26 +1,40 @@
 # RfX RAG Expert
 
-RfX RAG Expert is a case-scoped RfX drafting application for proposal and bid teams. It lets you upload a client PDF and questionnaire workbook, extract structured case facts, retrieve from vendor product truth and approved historical exemplars, draft grounded answers row by row, review them, and export filled questionnaire artifacts.
+RfX RAG Expert is a case-scoped RfX drafting workspace for proposal and bid teams. It ingests a client PDF and questionnaire workbook, extracts structured case facts, retrieves from approved product truth and historical exemplars, drafts grounded answers row by row, and keeps review and export explicit.
 
-## What The App Does
+The repository includes the FastAPI backend, the React frontend, sample synthetic seed data, and the docs that describe the app's data contracts, retrieval model, and reproducibility layer.
+
+The screenshots below use mocked sample data only. No customer files or local filesystem paths are shown.
+
+## Interface
+
+<p align="center">
+  <img src="docs/screenshots/workspace-light.png" alt="RfX RAG Expert workspace in light mode" width="49%" />
+  <img src="docs/screenshots/workspace-dark.png" alt="RfX RAG Expert workspace in dark mode" width="49%" />
+</p>
+
+## Key Capabilities
 
 - Create a case from a client PDF and optional questionnaire workbook.
 - Extract a structured case profile from the PDF.
-- Retrieve evidence from:
-  - the current case
-  - a product-truth corpus
-  - approved historical Q&A exemplars
+- Retrieve evidence from the current case, a product-truth corpus, and approved historical Q&A exemplars.
 - Draft and revise answers for individual questionnaire rows.
 - Run bulk-fill through the same grounded drafting path.
-- Keep approvals explicit before export.
+- Keep reviewer approval explicit before export.
 - Export filled questionnaire artifacts as a ZIP bundle containing XLSX and CSV.
 
-## What Is In This Repo
+## Repo Layout
 
 - `backend/`: FastAPI app, services, models, CLI, and Alembic migrations
 - `frontend/`: React + TypeScript UI
 - `docs/`: contracts and advanced architecture/runtime docs
 - `seed_data/`: synthetic sample vendor truth and customer exemplar packages
+
+## Public Repo Notes
+
+- The tracked seed data is synthetic and safe for public demo use.
+- The default local identity headers in `frontend/.env.local` are a development convenience only, not a production auth model.
+- The app currently targets local development and evaluation workflows first; production deployment concerns such as real auth, secret management, and hosted infrastructure are intentionally out of scope for this repo.
 
 ## Requirements
 
