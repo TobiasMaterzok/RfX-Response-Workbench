@@ -62,15 +62,15 @@
   },
   "models": {
     "case_profile_extraction": {
-      "model_id": "gpt-5.2",
+      "model_id": null,
       "reasoning_effort": "low"
     },
     "answer_planning": {
-      "model_id": "gpt-5.2",
+      "model_id": null,
       "reasoning_effort": "low"
     },
     "answer_rendering": {
-      "model_id": "gpt-5.2",
+      "model_id": null,
       "reasoning_effort": "low"
     }
   },

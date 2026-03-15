@@ -41,9 +41,9 @@ If no config is supplied, the repo resolves the committed `default` profile and 
 Current default behavior includes:
 
 - index with the runtime default embedding model from settings
-- case-profile extraction defaults to `gpt-5.2` with `low` reasoning effort
-- answer planning defaults to `gpt-5.2` with `low` reasoning effort
-- answer rendering defaults to `gpt-5.2` with `low` reasoning effort
+- case-profile extraction defaults to `RFX_OPENAI_RESPONSE_MODEL` from settings with `low` reasoning effort
+- answer planning defaults to `RFX_OPENAI_RESPONSE_MODEL` from settings with `low` reasoning effort
+- answer rendering defaults to `RFX_OPENAI_RESPONSE_MODEL` from settings with `low` reasoning effort
 - current PDF chunking stays on the legacy deterministic char-based chunker
 - default current PDF chunk unit is `legacy_char`
 - default current PDF chunking remains non-contextualized

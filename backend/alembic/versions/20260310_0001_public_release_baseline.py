@@ -127,12 +127,27 @@ def _schema_statements() -> list[str]:
     return [statement.strip() for statement in payload.split("\n\n") if statement.strip()]
 
 
+def _statement_preview(statement: str, *, max_length: int = 120) -> str:
+    preview = " ".join(statement.splitlines())
+    if len(preview) <= max_length:
+        return preview
+    return preview[: max_length - 3] + "..."
+
+
 def upgrade() -> None:
     bind = op.get_bind()
     if bind.dialect.name != "postgresql":
         raise RuntimeError("The first public release baseline only supports PostgreSQL.")
-    for statement in _schema_statements():
+    statements = _schema_statements()
+    total = len(statements)
+    print(f"[alembic] Applying public release baseline statements={total}", flush=True)
+    for index, statement in enumerate(statements, start=1):
+        print(
+            f"[alembic] Statement {index}/{total}: {_statement_preview(statement)}",
+            flush=True,
+        )
         bind.exec_driver_sql(statement)
+    print(f"[alembic] Public release baseline complete statements={total}", flush=True)
 
 
 def downgrade() -> None:

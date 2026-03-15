@@ -8,6 +8,7 @@ import pytest
 from openpyxl import Workbook
 from sqlalchemy import select
 
+from app.config import build_settings
 from app.exceptions import ValidationFailure
 from app.models.entities import (
     ArtifactBuild,
@@ -151,12 +152,13 @@ def test_default_pipeline_profile_is_committed_and_resolved(settings) -> None:
     assert selection.used_default_profile is True
     assert selection.resolved_pipeline.indexing.current_pdf.chunk_unit == "legacy_char"
     assert selection.resolved_pipeline.indexing.current_pdf.chunk_size == 900
+    assert selection.resolved_pipeline.indexing.embedding_model == settings.openai_embedding_model
     assert settings.openai_response_model == "gpt-5.2"
-    assert selection.resolved_pipeline.models.case_profile_extraction.model_id == "gpt-5.2"
+    assert selection.resolved_pipeline.models.case_profile_extraction.model_id == settings.openai_response_model
     assert selection.resolved_pipeline.models.case_profile_extraction.reasoning_effort == "low"
-    assert selection.resolved_pipeline.models.answer_planning.model_id == "gpt-5.2"
+    assert selection.resolved_pipeline.models.answer_planning.model_id == settings.openai_response_model
     assert selection.resolved_pipeline.models.answer_planning.reasoning_effort == "low"
-    assert selection.resolved_pipeline.models.answer_rendering.model_id == "gpt-5.2"
+    assert selection.resolved_pipeline.models.answer_rendering.model_id == settings.openai_response_model
     assert selection.resolved_pipeline.models.answer_rendering.reasoning_effort == "low"
     assert selection.resolved_pipeline.retrieval.candidate_pool.current_case_facts is None
     assert selection.resolved_pipeline.retrieval.candidate_pool.current_pdf_evidence == 24
@@ -169,6 +171,21 @@ def test_default_pipeline_profile_is_committed_and_resolved(settings) -> None:
         "product_truth",
         "historical_exemplars",
     ]
+
+
+def test_default_pipeline_profile_inherits_model_defaults_from_settings(tmp_path: Path) -> None:
+    settings = build_settings(
+        env_file=None,
+        database_url="sqlite+pysqlite:///:memory:",
+        storage_root=tmp_path / "storage",
+        openai_response_model="gpt-custom-response",
+        openai_embedding_model="text-embedding-custom",
+    )
+    selection = resolve_pipeline_selection(settings)
+    assert selection.resolved_pipeline.indexing.embedding_model == "text-embedding-custom"
+    assert selection.resolved_pipeline.models.case_profile_extraction.model_id == "gpt-custom-response"
+    assert selection.resolved_pipeline.models.answer_planning.model_id == "gpt-custom-response"
+    assert selection.resolved_pipeline.models.answer_rendering.model_id == "gpt-custom-response"
 
 
 def test_pipeline_validation_rejects_unknown_and_unsupported_fields(settings) -> None:

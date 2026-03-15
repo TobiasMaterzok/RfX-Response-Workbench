@@ -55,6 +55,17 @@ docker pull pgvector/pgvector:pg18-trixie
 docker compose up --build -d postgres backend frontend
 ```
 
+If you previously started the stack with an older PostgreSQL image layout or an older version of this repo that mounted the database volume at `/var/lib/postgresql/data`, the first boot on `pg18-trixie` can fail with a message about `pg_ctlcluster` and an unused mount at `/var/lib/postgresql/data`.
+
+For this repo's disposable local stack, the clean fix is:
+
+```bash
+docker compose down -v
+docker compose up --build -d postgres backend frontend
+```
+
+Only do `docker compose down -v` if you are willing to delete the local database volume for this stack.
+
 What happens:
 
 - `postgres` starts on `127.0.0.1:5432`
