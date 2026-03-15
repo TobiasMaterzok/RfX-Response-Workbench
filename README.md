@@ -61,6 +61,14 @@ This creates `.venv`, installs the backend/frontend dependencies, and copies `.e
 powershell -ExecutionPolicy Bypass -File .\scripts\windows\dev.ps1 bootstrap
 ```
 
+If you want to return to the pre-bootstrap repo state for the repo-owned artifacts only, run:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\windows\dev.ps1 hard-reset
+```
+
+This removes `.venv`, `frontend\node_modules`, repo `.env`, `frontend\.env.local`, and backend `*.egg-info`. It does not remove PostgreSQL data, Docker volumes, or app storage.
+
 ### 2. Configure environment
 
 Edit the generated config files and set at least these repo-root `.env` values:

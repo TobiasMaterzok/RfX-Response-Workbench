@@ -46,6 +46,14 @@ powershell -ExecutionPolicy Bypass -File .\scripts\windows\dev.ps1 bootstrap
 
 `bootstrap` creates `.env` and `frontend\.env.local` if they do not already exist.
 
+If you want to discard the repo-owned bootstrap artifacts and start that step again from scratch, run:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\windows\dev.ps1 hard-reset
+```
+
+This removes `.venv`, `frontend\node_modules`, repo `.env`, `frontend\.env.local`, and backend `*.egg-info`. It does **not** remove PostgreSQL data, Docker volumes, or `RFX_STORAGE_ROOT`.
+
 Edit the repo-root `.env` and set at least:
 
 - `RFX_DATABASE_URL`

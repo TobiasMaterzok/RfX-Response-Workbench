@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true, Position = 0)]
-    [ValidateSet("bootstrap", "init-db", "seed-sample", "run-backend", "run-frontend", "run-worker")]
+    [ValidateSet("bootstrap", "hard-reset", "init-db", "seed-sample", "run-backend", "run-frontend", "run-worker")]
     [string]$Command,
     [switch]$ForceEnv
 )
@@ -125,6 +125,21 @@ function Copy-TemplateIfNeeded {
     Copy-Item -LiteralPath $TemplatePath -Destination $TargetPath -Force
     Write-Step "Wrote $(Split-Path -Leaf $TargetPath) from template"
     Write-Log -Level "INFO" -Message "template=$TemplatePath target=$TargetPath"
+}
+
+function Remove-PathIfPresent {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Path,
+        [Parameter(Mandatory = $true)]
+        [string]$Label
+    )
+    if (-not (Test-Path -LiteralPath $Path)) {
+        Write-Log -Level "INFO" -Message "Skipping missing $Label at $Path"
+        return
+    }
+    Remove-Item -LiteralPath $Path -Recurse -Force
+    Write-Log -Level "INFO" -Message "Removed $Label at $Path"
 }
 
 function Invoke-ExternalCommand {
@@ -276,6 +291,28 @@ function Invoke-Bootstrap {
     Write-Step "Bootstrap complete"
 }
 
+function Invoke-HardReset {
+    Write-Step "Removing repo-owned bootstrap artifacts"
+    Remove-PathIfPresent -Path (Resolve-RepoPath ".venv") -Label ".venv"
+    Remove-PathIfPresent -Path (Resolve-RepoPath ".env") -Label "repo .env"
+    Remove-PathIfPresent -Path (Resolve-RepoPath "frontend\.env.local") -Label "frontend .env.local"
+    Remove-PathIfPresent -Path (Resolve-RepoPath "frontend\node_modules") -Label "frontend node_modules"
+
+    $backendRoot = Resolve-RepoPath "backend"
+    $eggInfoPaths = @(Get-ChildItem -LiteralPath $backendRoot -Filter "*.egg-info" -Force -ErrorAction SilentlyContinue)
+    if ($eggInfoPaths.Count -eq 0) {
+        Write-Log -Level "INFO" -Message "No backend .egg-info directories found under $backendRoot"
+    }
+    else {
+        foreach ($eggInfoPath in $eggInfoPaths) {
+            Remove-PathIfPresent -Path $eggInfoPath.FullName -Label "backend egg-info"
+        }
+    }
+
+    Write-Log -Level "INFO" -Message "hard-reset does not remove PostgreSQL data, Docker volumes, or repo storage artifacts."
+    Write-Step "Hard reset complete"
+}
+
 function Invoke-InitDb {
     $pythonExe = Resolve-VenvPython
     $envPath = Resolve-RepoPath ".env"
@@ -413,6 +450,7 @@ Write-Log -Level "INFO" -Message "Starting scripts/windows/dev.ps1 command=$Comm
 try {
     switch ($Command) {
         "bootstrap" { Invoke-Bootstrap }
+        "hard-reset" { Invoke-HardReset }
         "init-db" { Invoke-InitDb }
         "seed-sample" { Invoke-SeedSample }
         "run-backend" { Invoke-RunBackend }
