@@ -340,11 +340,14 @@ def validate_rendered_answer(
 def supported_product_names(
     evidence_items: Sequence[NormalizedEvidenceItem],
 ) -> set[str]:
-    return {
-        canonical_product_name(item.product_name)
-        for item in evidence_items
-        if item.layer == "product_truth" and canonical_product_name(item.product_name)
-    }
+    names: set[str] = set()
+    for item in evidence_items:
+        if item.layer != "product_truth":
+            continue
+        canonical_name = canonical_product_name(item.product_name)
+        if canonical_name is not None:
+            names.add(canonical_name)
+    return names
 
 
 def canonical_product_name(value: str | None) -> str | None:

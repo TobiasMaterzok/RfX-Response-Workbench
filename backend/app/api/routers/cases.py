@@ -771,14 +771,22 @@ def export_case_questionnaire(
     zip_upload_id = export_job.metadata_json.get("zip_upload_id")
     if not isinstance(zip_upload_id, str):
         raise ValidationFailure(f"Export job {export_job.id} completed without a ZIP output upload.")
+    includes_unapproved_drafts = export_job.metadata_json.get("includes_unapproved_drafts")
+    if not isinstance(includes_unapproved_drafts, bool):
+        raise ValidationFailure(
+            f"Export job {export_job.id} completed with invalid includes_unapproved_drafts metadata."
+        )
+    placeholder_row_count = export_job.metadata_json.get("placeholder_row_count")
+    if type(placeholder_row_count) is not int:
+        raise ValidationFailure(
+            f"Export job {export_job.id} completed with invalid placeholder_row_count metadata."
+        )
     return ExportResponse(
         export_job_id=export_job.id,
         status=export_job.status.value,
         export_mode=export_job.export_mode.value,
-        includes_unapproved_drafts=bool(
-            export_job.metadata_json.get("includes_unapproved_drafts", False)
-        ),
-        placeholder_row_count=int(export_job.metadata_json.get("placeholder_row_count", 0)),
+        includes_unapproved_drafts=includes_unapproved_drafts,
+        placeholder_row_count=placeholder_row_count,
         download_upload_id=export_job.output_upload_id,
         csv_download_upload_id=UUID(csv_upload_id),
         zip_download_upload_id=UUID(zip_upload_id),

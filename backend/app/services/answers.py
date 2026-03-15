@@ -307,11 +307,13 @@ def _load_retrieval_snapshot_items(
     *,
     retrieval_run_id,
 ) -> list[RetrievalSnapshotItem]:
-    return session.scalars(
-        select(RetrievalSnapshotItem)
-        .where(RetrievalSnapshotItem.retrieval_run_id == retrieval_run_id)
-        .order_by(RetrievalSnapshotItem.rank.asc())
-    ).all()
+    return list(
+        session.scalars(
+            select(RetrievalSnapshotItem)
+            .where(RetrievalSnapshotItem.retrieval_run_id == retrieval_run_id)
+            .order_by(RetrievalSnapshotItem.rank.asc())
+        ).all()
+    )
 
 
 def _pipeline_selection_for_retrieval_run(
@@ -511,11 +513,12 @@ def draft_answer_for_row(
     if revision_mode == "style_only":
         if latest_answer_version is None:
             raise ValidationFailure("Style-only revision requires a previous answer version.")
-        retrieval_run = session.get(RetrievalRun, latest_answer_version.retrieval_run_id)
-        if retrieval_run is None:
+        retrieval_run_candidate = session.get(RetrievalRun, latest_answer_version.retrieval_run_id)
+        if retrieval_run_candidate is None:
             raise ValidationFailure(
                 f"Answer version {latest_answer_version.id} is missing its retrieval run."
             )
+        retrieval_run = retrieval_run_candidate
         pipeline = _pipeline_selection_for_retrieval_run(
             retrieval_run=retrieval_run,
             settings=effective_settings,

@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import time
 import zipfile
+from copy import deepcopy
 from io import BytesIO, StringIO
 from pathlib import Path
 from uuid import UUID
@@ -12,6 +13,7 @@ from sqlalchemy import select, text
 
 from app.models.entities import BulkFillRowExecution, Questionnaire, RfxCase
 from app.models.enums import BulkFillRowStatus, BulkFillStatus
+from app.services import exports as exports_module
 from app.services.bulk_fill import create_initial_bulk_fill_request, run_bulk_fill_worker_once
 from tests.seed_paths import historical_customer_dir
 
@@ -454,3 +456,71 @@ def test_cancel_bulk_fill_route_does_not_require_questionnaire_lookup(
     )
     assert response.status_code == 200
     assert response.json()["request"]["status"] == "cancelled"
+
+
+def test_export_route_rejects_invalid_includes_unapproved_drafts_metadata(
+    client,
+    auth_headers: dict[str, str],
+    repo_root: Path,
+    monkeypatch,
+) -> None:
+    case_detail = _create_case_via_api(
+        client,
+        auth_headers=auth_headers,
+        repo_root=repo_root,
+        name="Invalid Export Bool Metadata",
+    )
+    original_export_questionnaire = exports_module.export_questionnaire
+
+    def patched_export_questionnaire(*args, **kwargs):
+        export_job = original_export_questionnaire(*args, **kwargs)
+        export_job.metadata_json = {
+            **deepcopy(export_job.metadata_json),
+            "includes_unapproved_drafts": "false",
+        }
+        return export_job
+
+    monkeypatch.setattr(exports_module, "export_questionnaire", patched_export_questionnaire)
+    monkeypatch.setattr("app.api.routers.cases.export_questionnaire", patched_export_questionnaire)
+
+    response = client.post(
+        f"/api/cases/{case_detail['id']}/export",
+        headers=auth_headers,
+        json={"mode": "approved_only"},
+    )
+    assert response.status_code == 422
+    assert "invalid includes_unapproved_drafts metadata" in response.json()["detail"]
+
+
+def test_export_route_rejects_invalid_placeholder_row_count_metadata(
+    client,
+    auth_headers: dict[str, str],
+    repo_root: Path,
+    monkeypatch,
+) -> None:
+    case_detail = _create_case_via_api(
+        client,
+        auth_headers=auth_headers,
+        repo_root=repo_root,
+        name="Invalid Export Count Metadata",
+    )
+    original_export_questionnaire = exports_module.export_questionnaire
+
+    def patched_export_questionnaire(*args, **kwargs):
+        export_job = original_export_questionnaire(*args, **kwargs)
+        export_job.metadata_json = {
+            **deepcopy(export_job.metadata_json),
+            "placeholder_row_count": True,
+        }
+        return export_job
+
+    monkeypatch.setattr(exports_module, "export_questionnaire", patched_export_questionnaire)
+    monkeypatch.setattr("app.api.routers.cases.export_questionnaire", patched_export_questionnaire)
+
+    response = client.post(
+        f"/api/cases/{case_detail['id']}/export",
+        headers=auth_headers,
+        json={"mode": "approved_only"},
+    )
+    assert response.status_code == 422
+    assert "invalid placeholder_row_count metadata" in response.json()["detail"]
