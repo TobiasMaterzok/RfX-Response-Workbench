@@ -20,6 +20,7 @@ import {
   draftAnswer,
   exportCase,
   getCaseDetail,
+  getRawTrace,
   getSessionContext,
   getThread,
   listAnswerVersions,
@@ -40,6 +41,9 @@ import type {
   DraftResponse,
   Evidence,
   QuestionnaireRow,
+  RawTrace,
+  RawTraceScope,
+  RawTraceStage,
   RetrievalSummary,
   SessionContext,
   ThreadDetail,
@@ -68,6 +72,7 @@ type RowFilter =
 type RowVisualState = "neutral" | "approved" | "approved-stale" | "failed";
 type ChatMessageVisualState = "neutral" | "approved" | "after-approved";
 type StatusChipTone = "neutral" | "accent" | "success" | "warning" | "danger";
+type ReviewViewMode = "draft" | "compare" | "history" | "raw";
 type EvidenceAuthorityKey =
   | "current_case_facts"
   | "current_case_pdf"
@@ -941,6 +946,200 @@ function relevanceTooltip(score: number): string {
   return `This score shows how directly the evidence matched the selected row. Higher values mean the system considered it more useful for this draft. Current score: ${score.toFixed(3)}.`;
 }
 
+function rawTraceScopeLabel(scope: RawTraceScope): string {
+  return scope === "selected_answer_version"
+    ? "Selected version"
+    : "Latest attempt";
+}
+
+function rawTraceScopeTooltip(scope: RawTraceScope): string {
+  return scope === "selected_answer_version"
+    ? "Review the exact planning and rendering exchanges tied to the version currently selected in this workspace."
+    : "Review the newest row attempt, including failed or not-yet-materialized attempts that may not match the selected version.";
+}
+
+function rawStageTone(stage: RawTraceStage): StatusChipTone {
+  return stage.availability === "available" ? "accent" : "warning";
+}
+
+function rawStageAvailabilityLabel(stage: RawTraceStage): string {
+  return stage.availability === "available" ? "captured" : "missing";
+}
+
+function rawStageAvailabilityTooltip(stage: RawTraceStage): string {
+  return stage.availability === "available"
+    ? "This stage has an exact stored request/response trace."
+    : "This stage does not have a stored request/response trace for the selected raw scope.";
+}
+
+function rawStageSourceLabel(stage: RawTraceStage): string {
+  switch (stage.source_type) {
+    case "reused_prior_plan":
+      return "reused prior plan";
+    case "current_run":
+      return "current run";
+    default:
+      return "trace source";
+  }
+}
+
+function rawStageSourceTooltip(stage: RawTraceStage): string {
+  switch (stage.source_type) {
+    case "reused_prior_plan":
+      return "This stage reused a planning trace captured on an earlier answer version instead of generating a new plan in the current run.";
+    case "current_run":
+      return "This stage was captured directly on the run currently in focus.";
+    default:
+      return "This identifies where the displayed trace was sourced from.";
+  }
+}
+
+function rawTraceSummaryLine(trace: RawTrace): string {
+  const parts = [
+    `Scope: ${rawTraceScopeLabel(trace.scope)}`,
+    `Latest attempt: ${attemptStateLabel(trace.latest_attempt_state)}`,
+  ];
+  if (trace.generation_path) {
+    parts.push(`Path: ${generationPathLabel(trace.generation_path)}`);
+  }
+  return parts.join(" · ");
+}
+
+function formatRawUsage(value: Record<string, unknown> | null): string {
+  if (!value) {
+    return "Unavailable";
+  }
+  return JSON.stringify(value, null, 2);
+}
+
+function rawCodeLines(value: string): Array<{ indent: number; text: string }> {
+  return value.replace(/\r\n?/g, "\n").split("\n").map((line) => {
+    const indentMatch = line.match(/^ */);
+    const indent = indentMatch?.[0].length ?? 0;
+    return {
+      indent,
+      text: line.slice(indent),
+    };
+  });
+}
+
+function RawCodeBlock({
+  value,
+  className = "",
+}: {
+  value: string;
+  className?: string;
+}) {
+  const lines = rawCodeLines(value);
+  return (
+    <div className={className ? `raw-code-block ${className}` : "raw-code-block"}>
+      {lines.map((line, index) => (
+        <div
+          key={`${index}-${line.indent}-${line.text}`}
+          className="raw-code-line"
+          style={
+            {
+              "--raw-code-indent": `${line.indent}`,
+            } as CSSProperties
+          }
+        >
+          {line.text || "\u00A0"}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function prettyPrintEmbeddedJsonBlocks(text: string): string {
+  const normalized = text.replace(/\r\n?/g, "\n");
+  return normalized.replace(
+    /<([a-zA-Z0-9_]+)>\n?([\s\S]*?)\n?<\/\1>/g,
+    (match, tagName: string, rawBody: string) => {
+      const trimmedBody = rawBody.trim();
+      if (!trimmedBody) {
+        return `<${tagName}>\n</${tagName}>`;
+      }
+      try {
+        const parsedBody = JSON.parse(trimmedBody);
+        return `<${tagName}>\n${formatPayloadValueForDisplay(parsedBody, null, 0)}\n</${tagName}>`;
+      } catch {
+        return match;
+      }
+    },
+  );
+}
+
+function formatPayloadStringForDisplay(
+  value: string,
+  key: string | null,
+  indentLevel: number,
+): string {
+  if (key !== "text") {
+    return JSON.stringify(value);
+  }
+  const normalized = prettyPrintEmbeddedJsonBlocks(value);
+  const indent = "  ".repeat(indentLevel);
+  const body = normalized.split("\n").map((line) => `${indent}${line}`).join("\n");
+  return `"""\n${body}\n${"  ".repeat(Math.max(indentLevel - 1, 0))}"""`;
+}
+
+function formatPayloadValueForDisplay(
+  value: unknown,
+  key: string | null,
+  indentLevel: number,
+): string {
+  const indent = "  ".repeat(indentLevel);
+  if (Array.isArray(value)) {
+    if (!value.length) {
+      return "[]";
+    }
+    return `[\n${value
+      .map(
+        (item) =>
+          `${"  ".repeat(indentLevel + 1)}${formatPayloadValueForDisplay(item, null, indentLevel + 1)}`,
+      )
+      .join(",\n")}\n${indent}]`;
+  }
+  if (value && typeof value === "object") {
+    const entries = Object.entries(value as Record<string, unknown>);
+    if (!entries.length) {
+      return "{}";
+    }
+    return `{\n${entries
+      .map(([entryKey, entryValue]) => {
+        if (typeof entryValue === "string" && entryKey === "text") {
+          return `${"  ".repeat(indentLevel + 1)}"${entryKey}": ${formatPayloadStringForDisplay(
+            entryValue,
+            entryKey,
+            indentLevel + 2,
+          )}`;
+        }
+        return `${"  ".repeat(indentLevel + 1)}"${entryKey}": ${formatPayloadValueForDisplay(
+          entryValue,
+          entryKey,
+          indentLevel + 1,
+        )}`;
+      })
+      .join(",\n")}\n${indent}}`;
+  }
+  if (typeof value === "string") {
+    return formatPayloadStringForDisplay(value, key, indentLevel);
+  }
+  return JSON.stringify(value);
+}
+
+function prettyPrintModelPayload(payloadText: string | null | undefined): string {
+  const normalized = payloadText?.trim() ?? "";
+  if (!normalized) {
+    return "";
+  }
+  try {
+    return formatPayloadValueForDisplay(JSON.parse(normalized), null, 0);
+  } catch {
+    return prettyPrintEmbeddedJsonBlocks(normalized);
+  }
+}
+
 function timelineEntryTitle(
   item: ChatMessage,
   assistantIndex: number,
@@ -1133,9 +1332,12 @@ function App() {
   const [isCaseFormVisible, setIsCaseFormVisible] = useState(false);
   const [isCaseProfileExpanded, setIsCaseProfileExpanded] = useState(false);
   const [isContextExpanded, setIsContextExpanded] = useState(false);
-  const [reviewViewMode, setReviewViewMode] = useState<
-    "draft" | "compare" | "history"
-  >("draft");
+  const [reviewViewMode, setReviewViewMode] =
+    useState<ReviewViewMode>("draft");
+  const [rawTrace, setRawTrace] = useState<RawTrace | null>(null);
+  const [isRawTraceLoading, setIsRawTraceLoading] = useState(false);
+  const [manualRawTraceScope, setManualRawTraceScope] =
+    useState<RawTraceScope | null>(null);
   const [draftActionMode, setDraftActionMode] = useState<
     "revise" | "regenerate" | null
   >(null);
@@ -1179,6 +1381,16 @@ function App() {
     () => new Map(answerVersions.map((version) => [version.id, version])),
     [answerVersions],
   );
+  const latestRowAnswerVersion = answerVersions[0] ?? null;
+  const effectiveRawTraceScope: RawTraceScope =
+    manualRawTraceScope === "selected_answer_version" && !selectedAnswerVersion
+      ? "latest_attempt"
+      : manualRawTraceScope ??
+        (selectedAnswerVersion ? "selected_answer_version" : "latest_attempt");
+  const shouldOfferLatestAttemptRawScope =
+    !!selectedAnswerVersion &&
+    (selectedRow?.latest_attempt_state !== "answer_available" ||
+      latestRowAnswerVersion?.id !== selectedAnswerVersion.id);
 
   const approvedAnswerVersion = useMemo(() => {
     if (!selectedRow?.approved_answer_version_id) {
@@ -1316,6 +1528,23 @@ function App() {
   const selectedAnswerIsApproved =
     !!selectedAnswerVersion &&
     selectedAnswerVersion.id === selectedRow?.approved_answer_version_id;
+  const rawTraceLatestAttemptVersion =
+    rawTrace?.answer_version_id
+      ? answerVersionsById.get(rawTrace.answer_version_id) ?? null
+      : null;
+  const rawTraceShowsSelectedVersion =
+    reviewViewMode === "raw" &&
+    effectiveRawTraceScope === "selected_answer_version";
+  const rawTraceShowsLatestAttempt =
+    reviewViewMode === "raw" && effectiveRawTraceScope === "latest_attempt";
+  const rawTraceLatestAttemptMatchesSelection =
+    rawTraceShowsLatestAttempt &&
+    !!selectedAnswerVersion &&
+    rawTrace?.answer_version_id === selectedAnswerVersion.id;
+  const rawAwareAttemptState =
+    rawTraceShowsLatestAttempt && rawTrace
+      ? rawTrace.latest_attempt_state
+      : activeAttemptState;
   const evidencePanelMaxWidth = useMemo(
     () => evidencePanelMaxWidthForWorkspace(workspaceWidth),
     [workspaceWidth],
@@ -1345,6 +1574,8 @@ function App() {
     setThreadState(null);
     setAnswerVersions([]);
     setSelectedAnswerVersionId(null);
+    setRawTrace(null);
+    setManualRawTraceScope(null);
     setMessage("");
   }, []);
 
@@ -1356,6 +1587,8 @@ function App() {
       setThreadState(null);
       setAnswerVersions([]);
       setSelectedAnswerVersionId(null);
+      setRawTrace(null);
+      setManualRawTraceScope(null);
       setMessage("");
       const threadId = latestAttemptThreadId(detail, row);
       const attemptState = latestAttemptState(detail, row);
@@ -1582,7 +1815,61 @@ function App() {
     setDraftActionMode(null);
     setExpandedEvidenceIds([]);
     setReviewViewMode("draft");
+    setRawTrace(null);
+    setManualRawTraceScope(null);
   }, [selectedRow?.id]);
+
+  useEffect(() => {
+    if (reviewViewMode !== "raw" || !selectedCase || !selectedRow) {
+      setIsRawTraceLoading(false);
+      return;
+    }
+    const selectedAnswerId =
+      effectiveRawTraceScope === "selected_answer_version"
+        ? selectedAnswerVersion?.id ?? null
+        : null;
+    if (
+      effectiveRawTraceScope === "selected_answer_version" &&
+      !selectedAnswerId
+    ) {
+      setRawTrace(null);
+      setIsRawTraceLoading(false);
+      return;
+    }
+    let active = true;
+    setIsRawTraceLoading(true);
+    void getRawTrace(selectedCase.id, selectedRow.id, {
+      scope: effectiveRawTraceScope,
+      answerVersionId: selectedAnswerId,
+    })
+      .then((result) => {
+        if (!active) {
+          return;
+        }
+        setRawTrace(result);
+      })
+      .catch((caught: Error) => {
+        if (!active) {
+          return;
+        }
+        setRawTrace(null);
+        setError(caught.message);
+      })
+      .finally(() => {
+        if (active) {
+          setIsRawTraceLoading(false);
+        }
+      });
+    return () => {
+      active = false;
+    };
+  }, [
+    effectiveRawTraceScope,
+    reviewViewMode,
+    selectedAnswerVersion?.id,
+    selectedCase,
+    selectedRow,
+  ]);
 
   useEffect(() => {
     setEvidencePanelWidth((current) =>
@@ -1815,6 +2102,14 @@ function App() {
       setThreadState(null);
       setError((caught as Error).message);
     }
+  }
+
+  async function handleInspectRawLatestAttemptVersion() {
+    if (!rawTraceLatestAttemptVersion) {
+      return;
+    }
+    setManualRawTraceScope("selected_answer_version");
+    await inspectAnswerVersion(rawTraceLatestAttemptVersion);
   }
 
   async function handleCreateCase(event: FormEvent<HTMLFormElement>) {
@@ -2847,6 +3142,16 @@ function App() {
                 >
                   History
                 </button>
+                <button
+                  type="button"
+                  className={
+                    reviewViewMode === "raw" ? "view-tab active" : "view-tab"
+                  }
+                  onClick={() => setReviewViewMode("raw")}
+                  aria-pressed={reviewViewMode === "raw"}
+                >
+                  Raw
+                </button>
               </div>
             </div>
 
@@ -3117,6 +3422,263 @@ function App() {
                   </div>
                 </div>
               ) : null}
+
+              {reviewViewMode === "raw" ? (
+                <div className="raw-trace-layout">
+                  <div className="timeline-header raw-trace-header">
+                    <div>
+                      <p className="eyebrow">Model trace</p>
+                      <h3>Exact planning and rendering exchanges</h3>
+                    </div>
+                    <p className="status-line">
+                      The raw trace is audit context for this row. Evidence
+                      remains separate in the inspector and review decisions
+                      still apply to answer versions, not payload text.
+                    </p>
+                  </div>
+
+                  {selectedAnswerVersion && shouldOfferLatestAttemptRawScope ? (
+                    <div className="raw-scope-toolbar">
+                      <div className="raw-scope-toggle" role="tablist" aria-label="Raw trace scope">
+                        {(["selected_answer_version", "latest_attempt"] as const).map(
+                          (scope) => (
+                            <button
+                              key={scope}
+                              type="button"
+                              className={
+                                effectiveRawTraceScope === scope
+                                  ? "view-tab active"
+                                  : "view-tab"
+                              }
+                              onClick={() => setManualRawTraceScope(scope)}
+                              aria-pressed={effectiveRawTraceScope === scope}
+                              title={rawTraceScopeTooltip(scope)}
+                            >
+                              {rawTraceScopeLabel(scope)}
+                            </button>
+                          ),
+                        )}
+                      </div>
+                      <p className="status-line">
+                        Compare the raw lineage for the selected version with
+                        the newest row attempt when they no longer match.
+                      </p>
+                    </div>
+                  ) : null}
+
+                  {isRawTraceLoading ? (
+                    <article className="timeline-empty raw-empty-state">
+                      <h4>Loading raw trace</h4>
+                      <p>
+                        Resolving the stored planning and rendering exchanges
+                        for the current scope.
+                      </p>
+                    </article>
+                  ) : rawTrace ? (
+                    <>
+                      <article className="raw-trace-summary-card">
+                        <div className="raw-trace-summary-header">
+                          <div>
+                            <p className="eyebrow">Trace summary</p>
+                            <h4>{rawTraceScopeLabel(rawTrace.scope)}</h4>
+                          </div>
+                          <div className="queue-chip-row">
+                            <StatusChip
+                              label={attemptStateLabel(
+                                rawTrace.latest_attempt_state,
+                              )}
+                              tone={
+                                rawTrace.latest_attempt_state ===
+                                "failed_no_answer"
+                                  ? "danger"
+                                  : rawTrace.latest_attempt_state ===
+                                      "pending_no_answer"
+                                    ? "warning"
+                                    : "neutral"
+                              }
+                              tooltip={attemptStateTooltip(
+                                rawTrace.latest_attempt_state,
+                              )}
+                            />
+                            {rawTrace.generation_path ? (
+                              <StatusChip
+                                label={generationPathLabel(
+                                  rawTrace.generation_path,
+                                )}
+                                tone="accent"
+                                muted
+                                tooltip={generationPathTooltip(
+                                  rawTrace.generation_path,
+                                )}
+                              />
+                            ) : null}
+                          </div>
+                        </div>
+                        <p className="status-line">
+                          {rawTraceSummaryLine(rawTrace)}
+                        </p>
+                        {rawTrace.failure_detail ? (
+                          <p className="raw-trace-failure">
+                            {rawTrace.failure_detail}
+                          </p>
+                        ) : null}
+                      </article>
+
+                      {([
+                        {
+                          key: "planning",
+                          title: "Planning stage",
+                          description:
+                            "Internal plan creation from the normalized evidence pack.",
+                          stage: rawTrace.planning_stage,
+                        },
+                        {
+                          key: "rendering",
+                          title: "Rendering stage",
+                          description:
+                            "Customer-facing answer rendering from the validated answer plan.",
+                          stage: rawTrace.rendering_stage,
+                        },
+                      ] as const).map(({ key, title, description, stage }) => (
+                        <article key={key} className="raw-stage-card">
+                          <div className="raw-stage-header">
+                            <div>
+                              <p className="eyebrow">Stage</p>
+                              <h4>{title}</h4>
+                              <p className="status-line">{description}</p>
+                            </div>
+                            <div className="queue-chip-row">
+                              <StatusChip
+                                label={rawStageAvailabilityLabel(stage)}
+                                tone={rawStageTone(stage)}
+                                muted
+                                tooltip={rawStageAvailabilityTooltip(stage)}
+                              />
+                              {stage.source_type ? (
+                                <StatusChip
+                                  label={rawStageSourceLabel(stage)}
+                                  tone="neutral"
+                                  muted
+                                  tooltip={rawStageSourceTooltip(stage)}
+                                />
+                              ) : null}
+                            </div>
+                          </div>
+
+                          {stage.availability === "available" ? (
+                            <>
+                              <dl className="raw-stage-meta-list">
+                                <div className="raw-stage-meta-row">
+                                  <dt>Prompt</dt>
+                                  <dd>
+                                    {humanizeStatus(
+                                      stage.prompt_family,
+                                      "Unavailable",
+                                    )}
+                                    {stage.prompt_version
+                                      ? ` · ${stage.prompt_version}`
+                                      : ""}
+                                  </dd>
+                                </div>
+                                <div className="raw-stage-meta-row">
+                                  <dt>Model</dt>
+                                  <dd>
+                                    {stage.actual_model_id ??
+                                      stage.requested_model_id ??
+                                      "Unavailable"}
+                                  </dd>
+                                </div>
+                                <div className="raw-stage-meta-row">
+                                  <dt>Source run</dt>
+                                  <dd>
+                                    {stage.source_execution_run_id ??
+                                      "Unavailable"}
+                                  </dd>
+                                </div>
+                                <div className="raw-stage-meta-row">
+                                  <dt>Source version</dt>
+                                  <dd>
+                                    {stage.source_answer_version_id ??
+                                      "Unavailable"}
+                                  </dd>
+                                </div>
+                                <div className="raw-stage-meta-row">
+                                  <dt>Invocation</dt>
+                                  <dd>
+                                    {stage.model_invocation_id ??
+                                      "Unavailable"}
+                                  </dd>
+                                </div>
+                                <div className="raw-stage-meta-row">
+                                  <dt>Reasoning</dt>
+                                  <dd>
+                                    {humanizeStatus(
+                                      stage.reasoning_effort,
+                                      "Unavailable",
+                                    )}
+                                  </dd>
+                                </div>
+                                <div className="raw-stage-meta-row">
+                                  <dt>Temperature</dt>
+                                  <dd>
+                                    {stage.temperature !== null
+                                      ? String(stage.temperature)
+                                      : "Unavailable"}
+                                  </dd>
+                                </div>
+                                <div className="raw-stage-meta-row">
+                                  <dt>Usage</dt>
+                                  <dd>
+                                    <RawCodeBlock
+                                      className="raw-inline-code"
+                                      value={formatRawUsage(stage.usage_json)}
+                                    />
+                                  </dd>
+                                </div>
+                              </dl>
+
+                              <label className="raw-block">
+                                <span>Request payload sent to model</span>
+                                <RawCodeBlock
+                                  className="raw-inline-code raw-payload-block"
+                                  value={prettyPrintModelPayload(
+                                    stage.request_payload_text,
+                                  )}
+                                />
+                              </label>
+                              <label className="raw-block">
+                                <span>Response payload returned by model</span>
+                                <RawCodeBlock
+                                  className="raw-inline-code raw-payload-block"
+                                  value={prettyPrintModelPayload(
+                                    stage.response_payload_text,
+                                  )}
+                                />
+                              </label>
+                            </>
+                          ) : (
+                            <article className="timeline-empty raw-empty-state">
+                              <h4>No stored trace for this stage</h4>
+                              <p>
+                                This scope does not have a captured request and
+                                response pair for the {title.toLowerCase()}.
+                              </p>
+                            </article>
+                          )}
+                        </article>
+                      ))}
+                    </>
+                  ) : (
+                    <article className="timeline-empty raw-empty-state">
+                      <h4>No raw trace available</h4>
+                      <p>
+                        Start a draft or retry attempt to create stored model
+                        exchanges for this row.
+                      </p>
+                    </article>
+                  )}
+                </div>
+              ) : null}
             </div>
 
             <div ref={composerRef} className="review-action-bar">
@@ -3241,7 +3803,9 @@ function App() {
                   </>
                 ) : hasGeneratedAnswer &&
                   (reviewViewMode === "history" ||
-                    reviewViewMode === "compare") ? (
+                    reviewViewMode === "compare" ||
+                    rawTraceShowsSelectedVersion ||
+                    rawTraceLatestAttemptMatchesSelection) ? (
                   <div className="history-review-actions">
                     <p className="status-line">
                       {rejectActionHint({
@@ -3275,6 +3839,36 @@ function App() {
                       </button>
                     </div>
                   </div>
+                ) : reviewViewMode === "raw" &&
+                  rawTraceShowsLatestAttempt &&
+                  !!rawTraceLatestAttemptVersion ? (
+                  <div className="history-review-actions">
+                    <p className="status-line">
+                      The raw tab is showing the newest attempt, which is a
+                      different answer version than the one currently selected.
+                      Inspect that latest version before approving or rejecting
+                      it.
+                    </p>
+                    <div className="action-row">
+                      <button
+                        type="button"
+                        className="ghost"
+                        onClick={() => void handleInspectRawLatestAttemptVersion()}
+                      >
+                        Inspect latest version
+                      </button>
+                      <button
+                        type="button"
+                        className="ghost"
+                        onClick={() =>
+                          setManualRawTraceScope("selected_answer_version")
+                        }
+                        disabled={!selectedAnswerVersion}
+                      >
+                        Return to selected version
+                      </button>
+                    </div>
+                  </div>
                 ) : (
                   <>
                     <button
@@ -3284,7 +3878,7 @@ function App() {
                     >
                       {isDrafting
                         ? "Waiting for model response..."
-                        : activeAttemptState === "failed_no_answer"
+                        : rawAwareAttemptState === "failed_no_answer"
                           ? "Retry answer"
                           : "Generate answer"}
                     </button>
@@ -3298,68 +3892,6 @@ function App() {
                 )}
               </div>
             </div>
-
-            {devPanelsEnabled ? (
-              <article className="dev-card">
-                <div className="list-header">
-                  <h3>Render-stage LLM payload</h3>
-                  <span>
-                    {inspectedAnswerVersion
-                      ? `v${inspectedAnswerVersion.version_number}`
-                      : "none"}
-                  </span>
-                </div>
-                {inspectedAnswerVersion ? (
-                  <>
-                    <p className="status-line">
-                      {generationPathLabel(
-                        inspectedAnswerVersion.generation_path,
-                      )}{" "}
-                      ·{" "}
-                      {inspectedAnswerVersion.llm_capture_stage ??
-                        "no captured stage"}{" "}
-                      · {inspectedAnswerVersion.llm_capture_status}
-                    </p>
-                    {inspectedAnswerVersion.llm_capture_status ===
-                    "captured" ? (
-                      <>
-                        <label className="raw-block">
-                          <span>Raw render prompt sent to LLM</span>
-                          <textarea
-                            readOnly
-                            value={
-                              inspectedAnswerVersion.llm_request_text ?? ""
-                            }
-                            rows={12}
-                          />
-                        </label>
-                        <label className="raw-block">
-                          <span>Raw render-stage model response</span>
-                          <textarea
-                            readOnly
-                            value={
-                              inspectedAnswerVersion.llm_response_text ?? ""
-                            }
-                            rows={10}
-                          />
-                        </label>
-                        <p className="empty-dev-state">
-                          Planning-stage lineage is stored separately in model
-                          invocations and execution runs.
-                        </p>
-                      </>
-                    ) : (
-                      <p className="empty-dev-state">
-                        Render-stage prompt capture is unavailable for this
-                        answer version.
-                      </p>
-                    )}
-                  </>
-                ) : (
-                  <p className="empty-dev-state">No answer version selected.</p>
-                )}
-              </article>
-            ) : null}
           </section>
 
           <section

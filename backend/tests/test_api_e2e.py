@@ -8,13 +8,18 @@ from io import BytesIO, StringIO
 from pathlib import Path
 from uuid import UUID
 
+import pytest
 from openpyxl import load_workbook
 from sqlalchemy import select, text
 
-from app.models.entities import BulkFillRowExecution, Questionnaire, RfxCase
+from app.exceptions import ValidationFailure
+from app.models.entities import BulkFillRowExecution, Questionnaire, QuestionnaireRow, RfxCase
 from app.models.enums import BulkFillRowStatus, BulkFillStatus
+from app.services.ai import StubAIService
+from app.services.answers import draft_answer_for_row
 from app.services import exports as exports_module
 from app.services.bulk_fill import create_initial_bulk_fill_request, run_bulk_fill_worker_once
+from app.services.identity import ensure_local_identity
 from tests.seed_paths import historical_customer_dir
 
 
@@ -45,6 +50,11 @@ def _create_case_via_api(
         )
     assert response.status_code == 200
     return response.json()
+
+
+class RenderingFailureAIService(StubAIService):
+    def render_answer(self, **kwargs):  # type: ignore[override]
+        raise ValidationFailure("Synthetic render failure for raw trace API coverage.")
 
 
 def test_case_create_draft_export_flow(
@@ -106,6 +116,36 @@ def test_case_create_draft_export_flow(
         revise_body["answer_version"]["retrieval_run_id"]
         == draft_body["answer_version"]["retrieval_run_id"]
     )
+
+    raw_selected_response = client.get(
+        f"/api/cases/{case_detail['id']}/rows/{first_row['id']}/raw-trace",
+        headers=auth_headers,
+        params={
+            "scope": "selected_answer_version",
+            "answer_version_id": revise_body["answer_version"]["id"],
+        },
+    )
+    assert raw_selected_response.status_code == 200
+    raw_selected_body = raw_selected_response.json()
+    assert raw_selected_body["scope"] == "selected_answer_version"
+    assert raw_selected_body["answer_version_id"] == revise_body["answer_version"]["id"]
+    assert raw_selected_body["planning_stage"]["availability"] == "available"
+    assert raw_selected_body["planning_stage"]["source_type"] == "reused_prior_plan"
+    assert raw_selected_body["rendering_stage"]["availability"] == "available"
+    assert raw_selected_body["rendering_stage"]["source_type"] == "current_run"
+
+    raw_latest_response = client.get(
+        f"/api/cases/{case_detail['id']}/rows/{first_row['id']}/raw-trace",
+        headers=auth_headers,
+        params={"scope": "latest_attempt"},
+    )
+    assert raw_latest_response.status_code == 200
+    raw_latest_body = raw_latest_response.json()
+    assert raw_latest_body["scope"] == "latest_attempt"
+    assert raw_latest_body["answer_version_id"] == revise_body["answer_version"]["id"]
+    assert raw_latest_body["latest_attempt_state"] == "answer_available"
+    assert raw_latest_body["planning_stage"]["availability"] == "available"
+    assert raw_latest_body["rendering_stage"]["availability"] == "available"
 
     thread_response = client.get(
         f"/api/cases/{case_detail['id']}/threads/{draft_body['thread']['id']}",
@@ -280,6 +320,9 @@ def test_case_create_draft_export_flow(
         headers=auth_headers,
     )
     assert download_response.status_code == 200
+    assert download_response.headers["content-disposition"].endswith(
+        '_filled.xlsx"'
+    )
     workbook = load_workbook(BytesIO(download_response.content))
     assert "QA" in workbook.sheetnames
     latest_placeholder = "No latest answer exported due to status: rejected."
@@ -313,8 +356,6 @@ def test_case_create_draft_export_flow(
             "nordtransit_logistik_ag_qa_filled.csv",
             "nordtransit_logistik_ag_qa_filled.xlsx",
         ]
-    assert download_response.headers["content-disposition"].endswith('_filled.xlsx"')
-
     cors_zip_download_response = client.get(
         f"/api/cases/downloads/{export_body['zip_download_upload_id']}",
         headers={**auth_headers, "Origin": "http://127.0.0.1:5173"},
@@ -324,6 +365,71 @@ def test_case_create_draft_export_flow(
         cors_zip_download_response.headers.get("access-control-expose-headers")
         == "Content-Disposition"
     )
+
+
+def test_raw_trace_endpoint_handles_failed_latest_attempt_and_invalid_scope(
+    client,
+    auth_headers: dict[str, str],
+    repo_root: Path,
+    container,
+    settings,
+) -> None:
+    case_detail = _create_case_via_api(
+        client,
+        auth_headers=auth_headers,
+        repo_root=repo_root,
+        name="Raw Trace Failure",
+    )
+    first_row = case_detail["questionnaire_rows"][0]
+
+    original_ai_service = container.ai_service
+    try:
+        with container.session_factory() as session:
+            context = ensure_local_identity(session, settings)
+            case = session.get(RfxCase, UUID(case_detail["id"]))
+            assert case is not None
+            row = session.get(QuestionnaireRow, UUID(first_row["id"]))
+            assert row is not None
+            container.ai_service = RenderingFailureAIService()
+            with pytest.raises(
+                ValidationFailure,
+                match="Synthetic render failure for raw trace API coverage.",
+            ):
+                draft_answer_for_row(
+                    session,
+                    ai_service=container.ai_service,
+                    case=case,
+                    row=row,
+                    user_id=context.user.id,
+                    user_message="Draft the answer.",
+                    thread=None,
+                )
+            session.commit()
+
+        latest_response = client.get(
+            f"/api/cases/{case_detail['id']}/rows/{first_row['id']}/raw-trace",
+            headers=auth_headers,
+            params={"scope": "latest_attempt"},
+        )
+        assert latest_response.status_code == 200
+        latest_body = latest_response.json()
+        assert latest_body["scope"] == "latest_attempt"
+        assert latest_body["latest_attempt_state"] == "failed_no_answer"
+        assert "Synthetic render failure" in latest_body["failure_detail"]
+        assert latest_body["planning_stage"]["availability"] == "available"
+        assert latest_body["rendering_stage"]["availability"] == "missing"
+
+        invalid_response = client.get(
+            f"/api/cases/{case_detail['id']}/rows/{first_row['id']}/raw-trace",
+            headers=auth_headers,
+            params={
+                "scope": "selected_answer_version",
+                "answer_version_id": "00000000-0000-0000-0000-000000000001",
+            },
+        )
+        assert invalid_response.status_code == 422
+    finally:
+        container.ai_service = original_ai_service
 
 
 def test_retry_failed_bulk_fill_route_returns_new_request(

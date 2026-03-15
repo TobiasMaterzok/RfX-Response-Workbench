@@ -942,7 +942,8 @@ input[type="checkbox"] {
 .case-brief,
 .answer-stage,
 .compare-mode-layout,
-.history-mode-layout {
+.history-mode-layout,
+.raw-trace-layout {
   display: grid;
   gap: 10px;
 }
@@ -1494,7 +1495,8 @@ input[type="checkbox"] {
   gap: 14px;
 }
 
-.history-mode-layout {
+.history-mode-layout,
+.raw-trace-layout {
   display: grid;
   gap: 10px;
   min-height: 0;
@@ -1543,6 +1545,108 @@ input[type="checkbox"] {
   overflow: hidden;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 3;
+}
+
+.raw-trace-header {
+  align-items: flex-start;
+}
+
+.raw-scope-toolbar {
+  display: grid;
+  gap: 8px;
+}
+
+.raw-scope-toggle {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 0;
+  width: fit-content;
+}
+
+.raw-trace-summary-card,
+.raw-stage-card {
+  display: grid;
+  gap: 12px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--ui-radius);
+  background: var(--color-panel);
+  padding: 16px;
+}
+
+.raw-trace-summary-card {
+  border-left: 4px solid var(--color-accent);
+}
+
+.raw-trace-summary-header,
+.raw-stage-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.raw-trace-summary-header h4,
+.raw-stage-header h4,
+.raw-empty-state h4 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.raw-trace-failure {
+  margin: 0;
+  color: var(--color-danger);
+  line-height: 1.5;
+}
+
+.raw-stage-meta-list {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding-top: 10px;
+  border-top: 1px solid var(--color-border);
+}
+
+.raw-stage-meta-row {
+  display: grid;
+  grid-template-columns: minmax(0, 120px) minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+}
+
+.raw-stage-meta-row dt {
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+}
+
+.raw-stage-meta-row dd {
+  margin: 0;
+  font-size: 0.84rem;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.raw-inline-code {
+  margin: 0;
+  font:
+    0.8rem/1.4 "IBM Plex Mono",
+    "SFMono-Regular",
+    monospace;
+}
+
+.raw-code-block {
+  margin: 0;
+}
+
+.raw-code-line {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  padding-left: calc(var(--raw-code-indent, 0) * 1ch);
+  min-height: 1.4em;
 }
 
 .revision-brief {
@@ -1854,14 +1958,27 @@ input[type="checkbox"] {
   gap: 8px;
 }
 
-.raw-block textarea {
-  width: 100%;
+.raw-block span {
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+}
+
+.raw-payload-block {
   min-height: 200px;
   box-sizing: border-box;
   border-radius: var(--ui-radius);
   border: 1px solid var(--color-border);
   padding: 14px;
   background: var(--color-code-surface);
+  color: var(--color-text);
+  overflow: auto;
+  font:
+    0.82rem/1.45 "IBM Plex Mono",
+    "SFMono-Regular",
+    monospace;
 }
 
 .empty-dev-state {
@@ -2233,6 +2350,7 @@ input[type="checkbox"] {
 
   .compare-mode-layout,
   .history-mode-layout,
+  .raw-trace-layout,
   .data-browser-grid {
     grid-template-columns: 1fr;
   }

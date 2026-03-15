@@ -162,6 +162,44 @@ export type ThreadDetail = {
   failure_detail: string | null;
 };
 
+export type RawTraceScope = "selected_answer_version" | "latest_attempt";
+
+export type RawTraceStage = {
+  availability: "available" | "missing";
+  source_type: string | null;
+  source_execution_run_id: string | null;
+  source_answer_version_id: string | null;
+  model_invocation_id: string | null;
+  prompt_family: string | null;
+  prompt_version: string | null;
+  requested_model_id: string | null;
+  actual_model_id: string | null;
+  reasoning_effort: string | null;
+  temperature: number | null;
+  provider_response_id: string | null;
+  service_tier: string | null;
+  usage_json: Record<string, unknown> | null;
+  request_payload_text: string | null;
+  response_payload_text: string | null;
+};
+
+export type RawTrace = {
+  scope: RawTraceScope;
+  row_id: string;
+  thread_id: string | null;
+  execution_run_id: string | null;
+  answer_version_id: string | null;
+  generation_path: string | null;
+  latest_attempt_state:
+    | "none"
+    | "answer_available"
+    | "failed_no_answer"
+    | "pending_no_answer";
+  failure_detail: string | null;
+  planning_stage: RawTraceStage;
+  rendering_stage: RawTraceStage;
+};
+
 export type ExportResponse = {
   export_job_id: string;
   status: string;

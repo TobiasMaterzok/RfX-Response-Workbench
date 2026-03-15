@@ -190,6 +190,42 @@ class ThreadDetailResponse(BaseModel):
     failure_detail: str | None
 
 
+RawTraceScopeLiteral = Literal["selected_answer_version", "latest_attempt"]
+RawTraceAvailabilityLiteral = Literal["available", "missing"]
+
+
+class RawTraceStageResponse(BaseModel):
+    availability: RawTraceAvailabilityLiteral
+    source_type: str | None
+    source_execution_run_id: UUID | None
+    source_answer_version_id: UUID | None
+    model_invocation_id: UUID | None
+    prompt_family: str | None
+    prompt_version: str | None
+    requested_model_id: str | None
+    actual_model_id: str | None
+    reasoning_effort: str | None
+    temperature: float | None
+    provider_response_id: str | None
+    service_tier: str | None
+    usage_json: dict[str, object] | None
+    request_payload_text: str | None
+    response_payload_text: str | None
+
+
+class RawTraceResponse(BaseModel):
+    scope: RawTraceScopeLiteral
+    row_id: UUID
+    thread_id: UUID | None
+    execution_run_id: UUID | None
+    answer_version_id: UUID | None
+    generation_path: str | None
+    latest_attempt_state: ThreadStateLiteral
+    failure_detail: str | None
+    planning_stage: RawTraceStageResponse
+    rendering_stage: RawTraceStageResponse
+
+
 class ExportRequestBody(BaseModel):
     mode: Literal["approved_only", "latest_available"]
     reproducibility_mode: Literal["best_effort", "strict_eval"] = "best_effort"

@@ -667,6 +667,405 @@ describe("App", () => {
     ).toHaveLength(3);
   });
 
+  it("shows raw planning and rendering traces and lets reviewers switch to the latest attempt scope", async () => {
+    fetchMock.mockImplementation(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = new URL(String(input), "http://localhost");
+        const method = init?.method ?? "GET";
+
+        if (url.pathname === "/api/session/context") {
+          return new Response(
+            JSON.stringify({
+              tenant_id: "tenant-1",
+              tenant_slug: "local-workspace",
+              tenant_name: "Local Workspace",
+              user_id: "user-1",
+              user_email: "local.user.test",
+              user_name: "Local Admin",
+            }),
+          );
+        }
+
+        if (url.pathname === "/api/cases" && method === "GET") {
+          return new Response(
+            JSON.stringify([
+              {
+                id: "case-1",
+                name: "NordTransit Pilot",
+                client_name: "NordTransit",
+                language: "de",
+                status: "active",
+                created_at: "2026-03-06T10:00:00Z",
+                updated_at: "2026-03-06T10:00:00Z",
+              },
+            ]),
+          );
+        }
+
+        if (url.pathname === "/api/cases/case-1" && method === "GET") {
+          return new Response(
+            JSON.stringify({
+              id: "case-1",
+              name: "NordTransit Pilot",
+              client_name: "NordTransit",
+              language: "de",
+              status: "active",
+              created_at: "2026-03-06T10:00:00Z",
+              updated_at: "2026-03-06T10:00:00Z",
+              profile: null,
+              latest_bulk_fill: null,
+              bulk_fill_history: [],
+              questionnaire_rows: [
+                {
+                  id: "row-1",
+                  source_row_id: "workbook:QA:2",
+                  source_row_number: 2,
+                  context: "Shared context",
+                  question: "What fits the scope?",
+                  current_answer: "Latest draft answer",
+                  review_status: "needs_review",
+                  approved_answer_version_id: null,
+                  approved_answer_text: null,
+                  last_error_detail: null,
+                  last_bulk_fill_request_id: null,
+                  last_bulk_fill_row_execution_id: null,
+                  last_bulk_fill_status: null,
+                  last_bulk_fill_attempt_number: null,
+                  latest_attempt_thread_id: "thread-2",
+                  latest_attempt_state: "answer_available",
+                },
+              ],
+              chats: [
+                {
+                  id: "thread-2",
+                  questionnaire_row_id: "row-1",
+                  title: "Row 2",
+                  updated_at: "2026-03-06T10:20:00Z",
+                },
+                {
+                  id: "thread-1",
+                  questionnaire_row_id: "row-1",
+                  title: "Row 2 older",
+                  updated_at: "2026-03-06T10:10:00Z",
+                },
+              ],
+            }),
+          );
+        }
+
+        if (
+          url.pathname === "/api/cases/case-1/rows/row-1/answers" &&
+          method === "GET"
+        ) {
+          return new Response(
+            JSON.stringify([
+              {
+                id: "answer-2",
+                chat_thread_id: "thread-2",
+                retrieval_run_id: "retrieval-2",
+                version_number: 2,
+                answer_text: "Latest draft answer",
+                status: "draft",
+                pipeline_profile_name: "default",
+                pipeline_config_hash: "cfg-2",
+                created_at: "2026-03-06T10:20:00Z",
+                model: "stub-ai-service",
+                generation_path: "two_stage_plan_render",
+                llm_capture_stage: "answer_rendering",
+                prompt_version: "answer_rendering_prompt.v3",
+                llm_capture_status: "captured",
+                llm_request_text: "latest render request",
+                llm_response_text: "Latest draft answer",
+              },
+              {
+                id: "answer-1",
+                chat_thread_id: "thread-1",
+                retrieval_run_id: "retrieval-1",
+                version_number: 1,
+                answer_text: "Older approved-style draft",
+                status: "draft",
+                pipeline_profile_name: "default",
+                pipeline_config_hash: "cfg-1",
+                created_at: "2026-03-06T10:10:00Z",
+                model: "stub-ai-service",
+                generation_path: "two_stage_plan_render",
+                llm_capture_stage: "answer_rendering",
+                prompt_version: "answer_rendering_prompt.v3",
+                llm_capture_status: "captured",
+                llm_request_text: "older render request",
+                llm_response_text: "Older approved-style draft",
+              },
+            ]),
+          );
+        }
+
+        if (
+          url.pathname === "/api/cases/case-1/threads/thread-2" &&
+          method === "GET"
+        ) {
+          return new Response(
+            JSON.stringify({
+              thread: {
+                id: "thread-2",
+                questionnaire_row_id: "row-1",
+                title: "Row 2",
+                updated_at: "2026-03-06T10:20:00Z",
+              },
+              thread_state: "answer_available",
+              messages: [],
+              answer_version: {
+                id: "answer-1",
+                chat_thread_id: "thread-2",
+                retrieval_run_id: "retrieval-1",
+                version_number: 1,
+                answer_text: "Older approved-style draft",
+                status: "draft",
+                pipeline_profile_name: "default",
+                pipeline_config_hash: "cfg-1",
+                created_at: "2026-03-06T10:10:00Z",
+                model: "stub-ai-service",
+                generation_path: "two_stage_plan_render",
+                llm_capture_stage: "answer_rendering",
+                prompt_version: "answer_rendering_prompt.v3",
+                llm_capture_status: "captured",
+                llm_request_text: "older render request",
+                llm_response_text: "Older approved-style draft",
+              },
+              retrieval: null,
+              evidence: [],
+              failure_detail: null,
+            }),
+          );
+        }
+
+        if (
+          url.pathname === "/api/cases/case-1/threads/thread-1" &&
+          method === "GET"
+        ) {
+          return new Response(
+            JSON.stringify({
+              thread: {
+                id: "thread-1",
+                questionnaire_row_id: "row-1",
+                title: "Row 2 older",
+                updated_at: "2026-03-06T10:10:00Z",
+              },
+              thread_state: "answer_available",
+              messages: [],
+              answer_version: {
+                id: "answer-1",
+                chat_thread_id: "thread-1",
+                retrieval_run_id: "retrieval-1",
+                version_number: 1,
+                answer_text: "Older approved-style draft",
+                status: "draft",
+                pipeline_profile_name: "default",
+                pipeline_config_hash: "cfg-1",
+                created_at: "2026-03-06T10:10:00Z",
+                model: "stub-ai-service",
+                generation_path: "two_stage_plan_render",
+                llm_capture_stage: "answer_rendering",
+                prompt_version: "answer_rendering_prompt.v3",
+                llm_capture_status: "captured",
+                llm_request_text: "older render request",
+                llm_response_text: "Older approved-style draft",
+              },
+              retrieval: null,
+              evidence: [],
+              failure_detail: null,
+            }),
+          );
+        }
+
+        if (
+          url.pathname === "/api/cases/case-1/rows/row-1/raw-trace" &&
+          method === "GET"
+        ) {
+          const scope = url.searchParams.get("scope");
+          const answerVersionId = url.searchParams.get("answer_version_id");
+          if (
+            scope === "selected_answer_version" &&
+            answerVersionId === "answer-1"
+          ) {
+            return new Response(
+              JSON.stringify({
+                scope: "selected_answer_version",
+                row_id: "row-1",
+                thread_id: "thread-1",
+                execution_run_id: "run-1",
+                answer_version_id: "answer-1",
+                generation_path: "two_stage_plan_render",
+                latest_attempt_state: "answer_available",
+                failure_detail: null,
+                planning_stage: {
+                  availability: "available",
+                  source_type: "current_run",
+                  source_execution_run_id: "run-1",
+                  source_answer_version_id: "answer-1",
+                  model_invocation_id: "plan-1",
+                  prompt_family: "answer_planning",
+                  prompt_version: "answer_planning_prompt.v2",
+                  requested_model_id: "gpt-5.2",
+                  actual_model_id: "gpt-5.2",
+                  reasoning_effort: "low",
+                  temperature: null,
+                  provider_response_id: "resp-plan-1",
+                  service_tier: null,
+                  usage_json: { input_tokens: 123, output_tokens: 45 },
+                  request_payload_text: JSON.stringify([
+                    {
+                      role: "user",
+                      content: [
+                        {
+                          type: "input_text",
+                          text:
+                            "<task>\nCreate a strict internal answer plan for one RfX questionnaire row.\nReturn only schema-valid JSON.\n</task>\n\n<normalized_evidence>\n[{\"id\":\"CF1\",\"title\":\"Scope item\"}]\n</normalized_evidence>",
+                        },
+                      ],
+                    },
+                  ]),
+                  response_payload_text:
+                    '{"plan":"selected","support_ids":["CF1","PT2"]}',
+                },
+                rendering_stage: {
+                  availability: "available",
+                  source_type: "current_run",
+                  source_execution_run_id: "run-1",
+                  source_answer_version_id: "answer-1",
+                  model_invocation_id: "render-1",
+                  prompt_family: "answer_rendering",
+                  prompt_version: "answer_rendering_prompt.v3",
+                  requested_model_id: "gpt-5.2",
+                  actual_model_id: "gpt-5.2",
+                  reasoning_effort: "low",
+                  temperature: 0,
+                  provider_response_id: "resp-render-1",
+                  service_tier: null,
+                  usage_json: { input_tokens: 210, output_tokens: 68 },
+                  request_payload_text: "selected rendering request",
+                  response_payload_text: "selected rendering response",
+                },
+              }),
+            );
+          }
+          if (scope === "latest_attempt") {
+            return new Response(
+              JSON.stringify({
+                scope: "latest_attempt",
+                row_id: "row-1",
+                thread_id: "thread-2",
+                execution_run_id: "run-2",
+                answer_version_id: "answer-2",
+                generation_path: "two_stage_plan_render",
+                latest_attempt_state: "answer_available",
+                failure_detail: null,
+                planning_stage: {
+                  availability: "available",
+                  source_type: "current_run",
+                  source_execution_run_id: "run-2",
+                  source_answer_version_id: "answer-2",
+                  model_invocation_id: "plan-2",
+                  prompt_family: "answer_planning",
+                  prompt_version: "answer_planning_prompt.v2",
+                  requested_model_id: "gpt-5.2",
+                  actual_model_id: "gpt-5.2",
+                  reasoning_effort: "medium",
+                  temperature: null,
+                  provider_response_id: "resp-plan-2",
+                  service_tier: null,
+                  usage_json: { input_tokens: 144, output_tokens: 55 },
+                  request_payload_text: JSON.stringify([
+                    {
+                      role: "user",
+                      content: [
+                        {
+                          type: "input_text",
+                          text:
+                            "<task>\nCreate the latest strict internal answer plan.\n</task>\n\n<normalized_evidence>\n[{\"id\":\"CF2\",\"title\":\"Latest scope item\"}]\n</normalized_evidence>",
+                        },
+                      ],
+                    },
+                  ]),
+                  response_payload_text:
+                    '{"plan":"latest","support_ids":["CF2","PT4"]}',
+                },
+                rendering_stage: {
+                  availability: "available",
+                  source_type: "current_run",
+                  source_execution_run_id: "run-2",
+                  source_answer_version_id: "answer-2",
+                  model_invocation_id: "render-2",
+                  prompt_family: "answer_rendering",
+                  prompt_version: "answer_rendering_prompt.v3",
+                  requested_model_id: "gpt-5.2",
+                  actual_model_id: "gpt-5.2",
+                  reasoning_effort: "medium",
+                  temperature: 0,
+                  provider_response_id: "resp-render-2",
+                  service_tier: null,
+                  usage_json: { input_tokens: 222, output_tokens: 74 },
+                  request_payload_text: "latest rendering request",
+                  response_payload_text: "latest rendering response",
+                },
+              }),
+            );
+          }
+        }
+
+        return new Response(
+          JSON.stringify({ detail: `Unhandled request ${method} ${url}` }),
+          { status: 500 },
+        );
+      },
+    );
+
+    render(<App />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Questionnaire rows")).toBeInTheDocument();
+    });
+    await waitFor(() => {
+      expect(
+        screen.getByRole("button", { name: "Revise wording" }),
+      ).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Raw" }));
+
+    await waitFor(() => {
+      expect(
+        screen.getByRole("button", { name: "Selected version" }),
+      ).toBeInTheDocument();
+      expect(screen.getByText("Planning stage")).toBeInTheDocument();
+      expect(
+        screen.getByText(/Create a strict internal answer plan/i),
+      ).toBeInTheDocument();
+      expect(
+        screen.getByText(/"id": "CF1"/),
+      ).toBeInTheDocument();
+      expect(
+        screen.getByText(/<normalized_evidence>/),
+      ).toBeInTheDocument();
+      expect(
+        screen.getByText(/selected rendering response/i),
+      ).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Latest attempt" }));
+
+    await waitFor(() => {
+      expect(
+        screen.getByText(/Create the latest strict internal answer plan/i),
+      ).toBeInTheDocument();
+      expect(
+        screen.getByText(/"id": "CF2"/),
+      ).toBeInTheDocument();
+      expect(
+        screen.getByText(/latest rendering response/i),
+      ).toBeInTheDocument();
+    });
+  });
+
   it("lets reviewers expand the full row background in the selected-row hero", async () => {
     const longContext =
       "CrownShield Insurance Services Ltd is a UK and Ireland specialty insurance services provider with a distributed broker network. The requested scope covers broker onboarding, policy servicing requests, low-complexity claims triage, and secure exchange of policy and claims documents. The main objective is to reduce shared-mailbox volume and create a consistent operational audit trail.";
@@ -926,7 +1325,7 @@ describe("App", () => {
     });
 
     expect(screen.getByText("Database view")).toBeInTheDocument();
-    expect(screen.getByDisplayValue("Prompt body")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Raw" })).toBeInTheDocument();
   });
 
   it("toggles the database view from the sidebar header button", async () => {

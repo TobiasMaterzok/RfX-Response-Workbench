@@ -55,13 +55,23 @@ from app.schemas.api import (
     ExportRequestBody,
     ExportResponse,
     QuestionnaireRowResponse,
+    RawTraceResponse,
+    RawTraceScopeLiteral,
+    RawTraceStageResponse,
     RejectRowRequest,
     RetrievalStageResponse,
     RetrievalSummaryResponse,
     ThreadDetailResponse,
     ThreadStateLiteral,
 )
-from app.services.answers import draft_answer_for_row, list_thread_messages
+from app.services.answers import (
+    RawTraceResult,
+    RawTraceStage,
+    draft_answer_for_row,
+    list_thread_messages,
+    raw_trace_for_latest_attempt,
+    raw_trace_for_selected_answer_version,
+)
 from app.services.bulk_fill import (
     _require_request_scope,
     approve_answer_version,
@@ -395,6 +405,50 @@ def _answer_response(session: Session, version: AnswerVersion) -> AnswerVersionR
     )
 
 
+def _raw_trace_stage_response(stage: RawTraceStage) -> RawTraceStageResponse:
+    invocation = stage.model_invocation
+    metadata = invocation.metadata_json if invocation is not None else {}
+    prompt_family = metadata.get("prompt_family")
+    prompt_version = metadata.get("prompt_version")
+    return RawTraceStageResponse(
+        availability=stage.availability,
+        source_type=stage.source_type,
+        source_execution_run_id=(
+            stage.source_execution_run.id if stage.source_execution_run is not None else None
+        ),
+        source_answer_version_id=(
+            stage.source_answer_version.id if stage.source_answer_version is not None else None
+        ),
+        model_invocation_id=invocation.id if invocation is not None else None,
+        prompt_family=prompt_family if isinstance(prompt_family, str) else None,
+        prompt_version=prompt_version if isinstance(prompt_version, str) else None,
+        requested_model_id=invocation.requested_model_id if invocation is not None else None,
+        actual_model_id=invocation.actual_model_id if invocation is not None else None,
+        reasoning_effort=invocation.reasoning_effort if invocation is not None else None,
+        temperature=invocation.temperature if invocation is not None else None,
+        provider_response_id=invocation.provider_response_id if invocation is not None else None,
+        service_tier=invocation.service_tier if invocation is not None else None,
+        usage_json=invocation.usage_json if invocation is not None else None,
+        request_payload_text=invocation.request_payload_text if invocation is not None else None,
+        response_payload_text=invocation.response_payload_text if invocation is not None else None,
+    )
+
+
+def _raw_trace_response(trace: RawTraceResult) -> RawTraceResponse:
+    return RawTraceResponse(
+        scope=trace.scope,
+        row_id=trace.row.id,
+        thread_id=trace.thread.id if trace.thread is not None else None,
+        execution_run_id=trace.execution_run.id if trace.execution_run is not None else None,
+        answer_version_id=trace.answer_version.id if trace.answer_version is not None else None,
+        generation_path=trace.generation_path,
+        latest_attempt_state=trace.latest_attempt_state,
+        failure_detail=trace.failure_detail,
+        planning_stage=_raw_trace_stage_response(trace.planning_stage),
+        rendering_stage=_raw_trace_stage_response(trace.rendering_stage),
+    )
+
+
 def _message_response(message: ChatMessage) -> ChatMessageResponse:
     return ChatMessageResponse(
         id=message.id,
@@ -679,6 +733,41 @@ def list_answer_versions(
         .order_by(AnswerVersion.version_number.desc())
     ).all()
     return [_answer_response(session, version) for version in versions]
+
+
+@router.get("/{case_id}/rows/{row_id}/raw-trace", response_model=RawTraceResponse)
+def get_row_raw_trace(
+    case_id: UUID,
+    row_id: UUID,
+    scope: RawTraceScopeLiteral = "latest_attempt",
+    answer_version_id: UUID | None = None,
+    session: Session = Depends(get_session),
+    user_context: UserContext = Depends(get_user_context),
+) -> RawTraceResponse:
+    case = require_case_scope(session, case_id=case_id, tenant_id=user_context.tenant.id)
+    row = require_row_scope(session, row_id=row_id, case=case)
+    if scope == "selected_answer_version":
+        if answer_version_id is None:
+            raise ValidationFailure(
+                "answer_version_id is required when scope='selected_answer_version'."
+            )
+        answer_version = session.get(AnswerVersion, answer_version_id)
+        if (
+            answer_version is None
+            or answer_version.case_id != case.id
+            or answer_version.questionnaire_row_id != row.id
+        ):
+            raise ValidationFailure(
+                f"Answer version {answer_version_id} is not available for row {row.id}."
+            )
+        return _raw_trace_response(
+            raw_trace_for_selected_answer_version(
+                session,
+                row=row,
+                answer_version=answer_version,
+            )
+        )
+    return _raw_trace_response(raw_trace_for_latest_attempt(session, row=row))
 
 
 @router.get("/{case_id}/threads/{thread_id}", response_model=ThreadDetailResponse)

@@ -7,6 +7,8 @@ import type {
   DraftResponse,
   BulkFillResponse,
   ExportResponse,
+  RawTrace,
+  RawTraceScope,
   SessionContext,
   ThreadDetail,
 } from "../types";
@@ -57,6 +59,24 @@ export async function getThread(
   threadId: string,
 ): Promise<ThreadDetail> {
   return request<ThreadDetail>(`/api/cases/${caseId}/threads/${threadId}`);
+}
+
+export async function getRawTrace(
+  caseId: string,
+  rowId: string,
+  options: {
+    scope: RawTraceScope;
+    answerVersionId?: string | null;
+  },
+): Promise<RawTrace> {
+  const params = new URLSearchParams();
+  params.set("scope", options.scope);
+  if (options.answerVersionId) {
+    params.set("answer_version_id", options.answerVersionId);
+  }
+  return request<RawTrace>(
+    `/api/cases/${caseId}/rows/${rowId}/raw-trace?${params.toString()}`,
+  );
 }
 
 export async function listAnswerVersions(

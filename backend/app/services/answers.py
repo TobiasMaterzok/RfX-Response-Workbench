@@ -29,6 +29,7 @@ from app.models.entities import (
 from app.models.enums import (
     AnswerStatus,
     ExecutionRunKind,
+    ExecutionRunStatus,
     LLMCaptureStatus,
     MessageRole,
     ModelInvocationKind,
@@ -84,6 +85,38 @@ class DraftResult:
 class RevisionDecision:
     mode: str
     reason: str
+
+
+RawTraceScope = Literal["selected_answer_version", "latest_attempt"]
+RawTraceAvailability = Literal["available", "missing"]
+
+
+@dataclass(frozen=True)
+class RawTraceStage:
+    availability: RawTraceAvailability
+    source_type: str | None
+    source_execution_run: ExecutionRun | None
+    source_answer_version: AnswerVersion | None
+    model_invocation: ModelInvocation | None
+
+
+@dataclass(frozen=True)
+class RawTraceResult:
+    scope: RawTraceScope
+    row: QuestionnaireRow
+    thread: ChatThread | None
+    execution_run: ExecutionRun | None
+    answer_version: AnswerVersion | None
+    generation_path: str | None
+    latest_attempt_state: Literal[
+        "none",
+        "answer_available",
+        "failed_no_answer",
+        "pending_no_answer",
+    ]
+    failure_detail: str | None
+    planning_stage: RawTraceStage
+    rendering_stage: RawTraceStage
 
 
 RevisionModeOverride = Literal["style_only", "content_change"]
@@ -423,6 +456,389 @@ def _answer_plan_from_invocation(invocation: ModelInvocation) -> AnswerPlan:
         raise ValidationFailure(
             f"Planning invocation {invocation.id} stored an invalid AnswerPlan payload: {exc}"
         ) from exc
+
+
+def _answer_version_for_execution_run(
+    session: Session,
+    *,
+    execution_run: ExecutionRun,
+) -> AnswerVersion | None:
+    return session.scalar(
+        select(AnswerVersion)
+        .where(AnswerVersion.execution_run_id == execution_run.id)
+        .order_by(AnswerVersion.version_number.desc())
+    )
+
+
+def _answer_generation_invocation_on_run(
+    session: Session,
+    *,
+    execution_run_id: UUID,
+    prompt_family: Literal["answer_planning", "answer_rendering"],
+) -> ModelInvocation | None:
+    invocations = session.scalars(
+        select(ModelInvocation)
+        .where(ModelInvocation.execution_run_id == execution_run_id)
+        .order_by(ModelInvocation.created_at.asc())
+    ).all()
+    return next(
+        (
+            invocation
+            for invocation in invocations
+            if invocation.kind == ModelInvocationKind.ANSWER_GENERATION
+            and invocation.metadata_json.get("prompt_family") == prompt_family
+        ),
+        None,
+    )
+
+
+def _rendering_invocation_on_run(
+    session: Session,
+    *,
+    execution_run_id: UUID,
+) -> ModelInvocation | None:
+    return _answer_generation_invocation_on_run(
+        session,
+        execution_run_id=execution_run_id,
+        prompt_family="answer_rendering",
+    )
+
+
+def _attempt_execution_runs_for_row(
+    session: Session,
+    *,
+    row: QuestionnaireRow,
+) -> list[ExecutionRun]:
+    candidate_runs = session.scalars(
+        select(ExecutionRun)
+        .where(
+            ExecutionRun.case_id == row.case_id,
+            ExecutionRun.kind.in_(
+                {
+                    ExecutionRunKind.ROW_DRAFT,
+                    ExecutionRunKind.ROW_REVISION,
+                    ExecutionRunKind.BULK_FILL_ROW_ATTEMPT,
+                }
+            ),
+        )
+    ).all()
+    row_id = str(row.id)
+    matching_runs = [
+        run
+        for run in candidate_runs
+        if run.inputs_json.get("row_id") == row_id
+        or run.inputs_json.get("questionnaire_row_id") == row_id
+    ]
+
+    def sortable_timestamp(value: datetime | None) -> str:
+        if value is None:
+            return ""
+        if value.tzinfo is None:
+            return value.replace(tzinfo=UTC).isoformat()
+        return value.astimezone(UTC).isoformat()
+
+    return sorted(
+        matching_runs,
+        key=lambda run: (
+            sortable_timestamp(run.finished_at),
+            sortable_timestamp(run.started_at),
+            sortable_timestamp(run.created_at),
+            str(run.id),
+        ),
+        reverse=True,
+    )
+
+
+def _latest_attempt_execution_run(
+    session: Session,
+    *,
+    row: QuestionnaireRow,
+) -> ExecutionRun | None:
+    runs = _attempt_execution_runs_for_row(session, row=row)
+    return runs[0] if runs else None
+
+
+def _thread_for_row(
+    session: Session,
+    *,
+    row: QuestionnaireRow,
+) -> ChatThread | None:
+    return session.scalar(
+        select(ChatThread)
+        .where(
+            ChatThread.case_id == row.case_id,
+            ChatThread.questionnaire_row_id == row.id,
+        )
+        .order_by(ChatThread.updated_at.desc(), ChatThread.created_at.desc())
+    )
+
+
+def _thread_for_trace(
+    session: Session,
+    *,
+    row: QuestionnaireRow,
+    execution_run: ExecutionRun | None,
+    answer_version: AnswerVersion | None,
+) -> ChatThread | None:
+    if execution_run is not None:
+        thread_id = execution_run.inputs_json.get("thread_id")
+        if isinstance(thread_id, str):
+            try:
+                thread = session.get(ChatThread, UUID(thread_id))
+            except ValueError:
+                thread = None
+            if thread is not None and thread.case_id == row.case_id and thread.questionnaire_row_id == row.id:
+                return thread
+    if answer_version is not None:
+        thread = session.get(ChatThread, answer_version.chat_thread_id)
+        if thread is not None and thread.case_id == row.case_id and thread.questionnaire_row_id == row.id:
+            return thread
+    return _thread_for_row(session, row=row)
+
+
+def _generation_path_for_execution_run(execution_run: ExecutionRun | None) -> str | None:
+    if execution_run is None:
+        return None
+    generation_path = execution_run.outputs_json.get("generation_path")
+    return generation_path if isinstance(generation_path, str) and generation_path.strip() else None
+
+
+def _raw_trace_stage_missing() -> RawTraceStage:
+    return RawTraceStage(
+        availability="missing",
+        source_type=None,
+        source_execution_run=None,
+        source_answer_version=None,
+        model_invocation=None,
+    )
+
+
+def _answer_version_from_text_id(
+    session: Session,
+    *,
+    answer_version_id: str | None,
+    row: QuestionnaireRow,
+) -> AnswerVersion | None:
+    if not answer_version_id:
+        return None
+    try:
+        answer_version = session.get(AnswerVersion, UUID(answer_version_id))
+    except ValueError:
+        return None
+    if answer_version is None or answer_version.case_id != row.case_id or answer_version.questionnaire_row_id != row.id:
+        return None
+    return answer_version
+
+
+def _raw_trace_stage(
+    *,
+    source_type: str,
+    source_execution_run: ExecutionRun | None,
+    source_answer_version: AnswerVersion | None,
+    model_invocation: ModelInvocation,
+) -> RawTraceStage:
+    return RawTraceStage(
+        availability="available",
+        source_type=source_type,
+        source_execution_run=source_execution_run,
+        source_answer_version=source_answer_version,
+        model_invocation=model_invocation,
+    )
+
+
+def _planning_trace_stage_for_execution_run(
+    session: Session,
+    *,
+    row: QuestionnaireRow,
+    execution_run: ExecutionRun | None,
+    answer_version: AnswerVersion | None,
+) -> RawTraceStage:
+    if execution_run is None:
+        return _raw_trace_stage_missing()
+    current_planning_id = execution_run.outputs_json.get("planning_model_invocation_id")
+    source_planning_id = execution_run.outputs_json.get("source_planning_model_invocation_id")
+    invocation: ModelInvocation | None = None
+    source_type = "current_run"
+    if isinstance(current_planning_id, str):
+        try:
+            invocation = session.get(ModelInvocation, UUID(current_planning_id))
+        except ValueError:
+            invocation = None
+    if invocation is None and isinstance(source_planning_id, str):
+        try:
+            invocation = session.get(ModelInvocation, UUID(source_planning_id))
+        except ValueError:
+            invocation = None
+        if invocation is not None and invocation.execution_run_id != execution_run.id:
+            source_type = "reused_prior_plan"
+    if invocation is None:
+        invocation = _planning_invocation_on_run(session, execution_run_id=execution_run.id)
+    if (
+        invocation is None
+        or invocation.kind != ModelInvocationKind.ANSWER_GENERATION
+        or invocation.metadata_json.get("prompt_family") != "answer_planning"
+    ):
+        return _raw_trace_stage_missing()
+    source_execution_run = session.get(ExecutionRun, invocation.execution_run_id)
+    if source_execution_run is None:
+        return _raw_trace_stage_missing()
+    if invocation.execution_run_id == execution_run.id:
+        source_type = "current_run"
+    if source_type == "reused_prior_plan":
+        source_answer_version = _answer_version_from_text_id(
+            session,
+            answer_version_id=cast(str | None, execution_run.outputs_json.get("reused_answer_version_id")),
+            row=row,
+        ) or _answer_version_for_execution_run(session, execution_run=source_execution_run)
+    else:
+        source_answer_version = answer_version or _answer_version_for_execution_run(
+            session,
+            execution_run=source_execution_run,
+        )
+    return _raw_trace_stage(
+        source_type=source_type,
+        source_execution_run=source_execution_run,
+        source_answer_version=source_answer_version,
+        model_invocation=invocation,
+    )
+
+
+def _rendering_trace_stage_for_execution_run(
+    session: Session,
+    *,
+    execution_run: ExecutionRun | None,
+    answer_version: AnswerVersion | None,
+) -> RawTraceStage:
+    if execution_run is None:
+        return _raw_trace_stage_missing()
+    invocation: ModelInvocation | None = None
+    if answer_version is not None and answer_version.model_invocation_id is not None:
+        invocation = session.get(ModelInvocation, answer_version.model_invocation_id)
+    if invocation is None:
+        rendering_invocation_id = execution_run.outputs_json.get("rendering_model_invocation_id")
+        if not isinstance(rendering_invocation_id, str):
+            rendering_invocation_id = execution_run.outputs_json.get("model_invocation_id")
+        if isinstance(rendering_invocation_id, str):
+            try:
+                invocation = session.get(ModelInvocation, UUID(rendering_invocation_id))
+            except ValueError:
+                invocation = None
+    if invocation is None:
+        invocation = _rendering_invocation_on_run(session, execution_run_id=execution_run.id)
+    if (
+        invocation is None
+        or invocation.kind != ModelInvocationKind.ANSWER_GENERATION
+        or invocation.metadata_json.get("prompt_family") != "answer_rendering"
+    ):
+        return _raw_trace_stage_missing()
+    source_execution_run = session.get(ExecutionRun, invocation.execution_run_id)
+    if source_execution_run is None:
+        return _raw_trace_stage_missing()
+    source_answer_version = answer_version or _answer_version_for_execution_run(
+        session,
+        execution_run=source_execution_run,
+    )
+    return _raw_trace_stage(
+        source_type="current_run",
+        source_execution_run=source_execution_run,
+        source_answer_version=source_answer_version,
+        model_invocation=invocation,
+    )
+
+
+def _latest_attempt_state_for_row(
+    session: Session,
+    *,
+    row: QuestionnaireRow,
+) -> tuple[
+    Literal["none", "answer_available", "failed_no_answer", "pending_no_answer"],
+    ExecutionRun | None,
+    AnswerVersion | None,
+]:
+    latest_run = _latest_attempt_execution_run(session, row=row)
+    if latest_run is None:
+        return "none", None, None
+    latest_answer = _answer_version_for_execution_run(session, execution_run=latest_run)
+    if latest_answer is not None:
+        return "answer_available", latest_run, latest_answer
+    if latest_run.status == ExecutionRunStatus.FAILED:
+        return "failed_no_answer", latest_run, None
+    return "pending_no_answer", latest_run, None
+
+
+def raw_trace_for_selected_answer_version(
+    session: Session,
+    *,
+    row: QuestionnaireRow,
+    answer_version: AnswerVersion,
+) -> RawTraceResult:
+    execution_run = _load_execution_run_for_answer(session, answer_version=answer_version)
+    latest_attempt_state, _, _ = _latest_attempt_state_for_row(session, row=row)
+    return RawTraceResult(
+        scope="selected_answer_version",
+        row=row,
+        thread=_thread_for_trace(
+            session,
+            row=row,
+            execution_run=execution_run,
+            answer_version=answer_version,
+        ),
+        execution_run=execution_run,
+        answer_version=answer_version,
+        generation_path=(
+            _generation_path_for_execution_run(execution_run) or TWO_STAGE_PLAN_RENDER_PATH
+        ),
+        latest_attempt_state=latest_attempt_state,
+        failure_detail=None,
+        planning_stage=_planning_trace_stage_for_execution_run(
+            session,
+            row=row,
+            execution_run=execution_run,
+            answer_version=answer_version,
+        ),
+        rendering_stage=_rendering_trace_stage_for_execution_run(
+            session,
+            execution_run=execution_run,
+            answer_version=answer_version,
+        ),
+    )
+
+
+def raw_trace_for_latest_attempt(
+    session: Session,
+    *,
+    row: QuestionnaireRow,
+) -> RawTraceResult:
+    latest_attempt_state, execution_run, answer_version = _latest_attempt_state_for_row(
+        session,
+        row=row,
+    )
+    return RawTraceResult(
+        scope="latest_attempt",
+        row=row,
+        thread=_thread_for_trace(
+            session,
+            row=row,
+            execution_run=execution_run,
+            answer_version=answer_version,
+        ),
+        execution_run=execution_run,
+        answer_version=answer_version,
+        generation_path=_generation_path_for_execution_run(execution_run),
+        latest_attempt_state=latest_attempt_state,
+        failure_detail=execution_run.error_detail if execution_run is not None else None,
+        planning_stage=_planning_trace_stage_for_execution_run(
+            session,
+            row=row,
+            execution_run=execution_run,
+            answer_version=answer_version,
+        ),
+        rendering_stage=_rendering_trace_stage_for_execution_run(
+            session,
+            execution_run=execution_run,
+            answer_version=answer_version,
+        ),
+    )
 
 
 def draft_answer_for_row(
