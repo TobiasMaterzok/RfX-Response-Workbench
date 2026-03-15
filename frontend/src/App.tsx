@@ -73,6 +73,13 @@ type RowVisualState = "neutral" | "approved" | "approved-stale" | "failed";
 type ChatMessageVisualState = "neutral" | "approved" | "after-approved";
 type StatusChipTone = "neutral" | "accent" | "success" | "warning" | "danger";
 type ReviewViewMode = "draft" | "compare" | "history" | "raw";
+type DraftProgressAction = "generate" | "regenerate";
+type DraftProgressState = {
+  rowId: string;
+  action: DraftProgressAction;
+  phaseIndex: number;
+  elapsedSeconds: number;
+};
 type EvidenceAuthorityKey =
   | "current_case_facts"
   | "current_case_pdf"
@@ -147,6 +154,12 @@ const EVIDENCE_PANEL_DEFAULT_WIDTH = 360;
 const EVIDENCE_PANEL_MIN_WIDTH = 320;
 const EVIDENCE_PANEL_MAX_WIDTH = 520;
 const EVIDENCE_PANEL_RESIZE_STEP = 24;
+const DRAFT_PROGRESS_PHASES = [
+  { label: "Collecting evidence", startsAtMs: 0 },
+  { label: "Evidence collected", startsAtMs: 3000 },
+  { label: "Planning answer", startsAtMs: 6000 },
+  { label: "Drafting answer", startsAtMs: 10000 },
+] as const;
 
 function renderDevValue(value: unknown): string {
   if (value === null || value === undefined) {
@@ -247,20 +260,6 @@ function dataBrowserScopeChipLabel(
 
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function summarizeText(
-  value: string | null | undefined,
-  maxLength = 180,
-): string {
-  const normalized = value?.trim() ?? "";
-  if (!normalized) {
-    return "No context available.";
-  }
-  if (normalized.length <= maxLength) {
-    return normalized;
-  }
-  return `${normalized.slice(0, maxLength - 1).trimEnd()}…`;
 }
 
 function statusToneForReviewStatus(
@@ -1164,6 +1163,18 @@ function timelineEntryEyebrow(item: ChatMessage): string {
   return humanizeStatus(item.role, "event");
 }
 
+function draftProgressTitle(action: DraftProgressAction): string {
+  return action === "generate" ? "Generating draft" : "Regenerating draft";
+}
+
+function draftProgressTooltip(): string {
+  return "This temporary assistant card shows estimated client-side progress while the current draft request is still running.";
+}
+
+function draftProgressStatusCopy(elapsedSeconds: number, phaseLabel: string): string {
+  return `${elapsedSeconds}s... ${phaseLabel}`;
+}
+
 function StatusChip({
   label,
   tone,
@@ -1338,6 +1349,9 @@ function App() {
   const [isRawTraceLoading, setIsRawTraceLoading] = useState(false);
   const [manualRawTraceScope, setManualRawTraceScope] =
     useState<RawTraceScope | null>(null);
+  const [draftProgress, setDraftProgress] = useState<DraftProgressState | null>(
+    null,
+  );
   const [draftActionMode, setDraftActionMode] = useState<
     "revise" | "regenerate" | null
   >(null);
@@ -1361,6 +1375,8 @@ function App() {
     startWidth: number;
   } | null>(null);
   const evidenceResizeCleanupRef = useRef<(() => void) | null>(null);
+  const draftProgressTimeoutIdsRef = useRef<number[]>([]);
+  const draftProgressIntervalIdRef = useRef<number | null>(null);
 
   const selectedAnswerVersion = useMemo(() => {
     if (!selectedAnswerVersionId) {
@@ -1415,11 +1431,20 @@ function App() {
     : selectedCase && selectedRow
       ? latestAttemptState(selectedCase, selectedRow)
       : "none";
+  const activeDraftProgress =
+    selectedRow && draftProgress?.rowId === selectedRow.id ? draftProgress : null;
+  const activeDraftProgressPhase =
+    activeDraftProgress &&
+    DRAFT_PROGRESS_PHASES[activeDraftProgress.phaseIndex] !== undefined
+      ? DRAFT_PROGRESS_PHASES[activeDraftProgress.phaseIndex].label
+      : null;
+  const draftProgressScrollKey = activeDraftProgress
+    ? `${activeDraftProgress.rowId}:${activeDraftProgress.action}`
+    : null;
   const hasGeneratedAnswer = selectedAnswerVersion !== null;
   const latestChatMessageId =
     threadState?.messages[threadState.messages.length - 1]?.id ?? null;
   const isChatFocusMode = isSidebarCollapsed && isEvidenceCollapsed;
-  const hasLongContext = (selectedRow?.context.length ?? 0) > 220;
   const approvedMessageIndex = useMemo(() => {
     const approvedAnswerVersionId = selectedRow?.approved_answer_version_id;
     if (!approvedAnswerVersionId) {
@@ -1568,8 +1593,68 @@ function App() {
     [activeViewMode, effectiveEvidencePanelWidth],
   );
 
+  const clearDraftProgress = useCallback(() => {
+    for (const timeoutId of draftProgressTimeoutIdsRef.current) {
+      window.clearTimeout(timeoutId);
+    }
+    draftProgressTimeoutIdsRef.current = [];
+    if (draftProgressIntervalIdRef.current !== null) {
+      window.clearInterval(draftProgressIntervalIdRef.current);
+      draftProgressIntervalIdRef.current = null;
+    }
+    setDraftProgress(null);
+  }, []);
+
+  const startDraftProgress = useCallback(
+    (rowId: string, action: DraftProgressAction) => {
+      clearDraftProgress();
+      setDraftProgress({
+        rowId,
+        action,
+        phaseIndex: 0,
+        elapsedSeconds: 0,
+      });
+      draftProgressTimeoutIdsRef.current = DRAFT_PROGRESS_PHASES.slice(1).map(
+        ({ startsAtMs }, offset) =>
+          window.setTimeout(() => {
+            const phaseIndex = offset + 1;
+            setDraftProgress((current) => {
+              if (
+                current === null ||
+                current.rowId !== rowId ||
+                current.action !== action
+              ) {
+                return current;
+              }
+              return {
+                ...current,
+                phaseIndex,
+              };
+            });
+          }, startsAtMs),
+      );
+      draftProgressIntervalIdRef.current = window.setInterval(() => {
+        setDraftProgress((current) => {
+          if (
+            current === null ||
+            current.rowId !== rowId ||
+            current.action !== action
+          ) {
+            return current;
+          }
+          return {
+            ...current,
+            elapsedSeconds: current.elapsedSeconds + 1,
+          };
+        });
+      }, 1000);
+    },
+    [clearDraftProgress],
+  );
+
   const clearRowWorkspace = useCallback((row: QuestionnaireRow | null) => {
     workspaceLoadIdRef.current += 1;
+    clearDraftProgress();
     setSelectedRow(row);
     setThreadState(null);
     setAnswerVersions([]);
@@ -1577,12 +1662,13 @@ function App() {
     setRawTrace(null);
     setManualRawTraceScope(null);
     setMessage("");
-  }, []);
+  }, [clearDraftProgress]);
 
   const loadRowArtifacts = useCallback(
     async (detail: CaseDetail, row: QuestionnaireRow) => {
       const requestId = workspaceLoadIdRef.current + 1;
       workspaceLoadIdRef.current = requestId;
+      clearDraftProgress();
       setSelectedRow(row);
       setThreadState(null);
       setAnswerVersions([]);
@@ -1621,7 +1707,7 @@ function App() {
           : null,
       );
     },
-    [],
+    [clearDraftProgress],
   );
 
   const refreshSelectedCase = useCallback(
@@ -1805,19 +1891,34 @@ function App() {
       return;
     }
     chatLogRef.current.scrollTop = chatLogRef.current.scrollHeight;
-  }, [selectedRow?.id, latestChatMessageId]);
+  }, [draftProgressScrollKey, selectedRow?.id, latestChatMessageId]);
 
   useEffect(() => {
     setIsContextExpanded(false);
   }, [selectedRow?.id]);
 
   useEffect(() => {
+    clearDraftProgress();
     setDraftActionMode(null);
     setExpandedEvidenceIds([]);
     setReviewViewMode("draft");
     setRawTrace(null);
     setManualRawTraceScope(null);
-  }, [selectedRow?.id]);
+  }, [clearDraftProgress, selectedRow?.id]);
+
+  useEffect(
+    () => () => {
+      for (const timeoutId of draftProgressTimeoutIdsRef.current) {
+        window.clearTimeout(timeoutId);
+      }
+      draftProgressTimeoutIdsRef.current = [];
+      if (draftProgressIntervalIdRef.current !== null) {
+        window.clearInterval(draftProgressIntervalIdRef.current);
+        draftProgressIntervalIdRef.current = null;
+      }
+    },
+    [],
+  );
 
   useEffect(() => {
     if (reviewViewMode !== "raw" || !selectedCase || !selectedRow) {
@@ -2348,6 +2449,9 @@ function App() {
     if (!selectedCase || !selectedRow || isDrafting) {
       return;
     }
+    const progressAction: DraftProgressAction = inspectedAnswerVersion
+      ? "regenerate"
+      : "generate";
     const answerThreadId = inspectedAnswerVersion
       ? threadLabelForAnswerVersion(
           inspectedAnswerVersion,
@@ -2357,6 +2461,7 @@ function App() {
     try {
       setError(null);
       setIsDrafting(true);
+      startDraftProgress(selectedRow.id, progressAction);
       setStatus("Waiting for model response...");
       const result = await draftAnswer(
         selectedCase.id,
@@ -2370,16 +2475,19 @@ function App() {
       setThreadState(threadDetailFromDraftResponse(result));
       setSelectedAnswerVersionId(result.answer_version.id);
       setDraftActionMode(null);
-      setStatus(
-        inspectedAnswerVersion ? "Answer regenerated." : "Answer generated.",
-      );
+      clearDraftProgress();
+      setStatus(progressAction === "regenerate" ? "Answer regenerated." : "Answer generated.");
       await refreshSelectedCase(selectedCase.id, selectedRow.id);
     } catch (caught) {
       setError((caught as Error).message);
+      clearDraftProgress();
       setStatus(
-        inspectedAnswerVersion ? "Regeneration failed." : "Generation failed.",
+        progressAction === "regenerate"
+          ? "Regeneration failed."
+          : "Generation failed.",
       );
     } finally {
+      clearDraftProgress();
       setIsDrafting(false);
     }
   }
@@ -3274,7 +3382,35 @@ function App() {
                         },
                       );
                     })()
-                  ) : (
+                  ) : null}
+                  {activeDraftProgress ? (
+                    <article
+                      className="message timeline-entry draft-progress-entry"
+                      data-role="assistant"
+                    >
+                      <div className="timeline-marker" />
+                      <div className="timeline-entry-body">
+                        <div className="timeline-entry-header">
+                          <span className="timeline-entry-eyebrow">
+                            Draft output
+                          </span>
+                          <StatusChip
+                            label="in progress"
+                            tone="warning"
+                            tooltip={draftProgressTooltip()}
+                          />
+                        </div>
+                        <h4>{draftProgressTitle(activeDraftProgress.action)}</h4>
+                        <p className="draft-progress-copy">
+                          {draftProgressStatusCopy(
+                            activeDraftProgress.elapsedSeconds,
+                            activeDraftProgressPhase ?? "",
+                          )}
+                        </p>
+                      </div>
+                    </article>
+                  ) : null}
+                  {!(threadState?.messages ?? []).length && !activeDraftProgress ? (
                     <article className="timeline-empty">
                       <h4>No drafting events yet</h4>
                       <p>
@@ -3282,7 +3418,7 @@ function App() {
                         timeline.
                       </p>
                     </article>
-                  )}
+                  ) : null}
                   {hasApprovedAnswer && !selectedAnswerIsApproved ? (
                     <article className="conversation-callout">
                       <span>

@@ -1441,6 +1441,14 @@ input[type="checkbox"] {
   border-color: var(--color-warning);
 }
 
+.draft-progress-entry .timeline-marker {
+  animation: draft-progress-pulse 1.4s ease-in-out infinite;
+}
+
+.draft-progress-copy {
+  font-variant-numeric: tabular-nums;
+}
+
 .timeline-failure {
   grid-template-columns: 1fr;
   border-left: 4px solid var(--color-danger);
@@ -1449,6 +1457,19 @@ input[type="checkbox"] {
 
 .timeline-empty {
   grid-template-columns: 1fr;
+}
+
+@keyframes draft-progress-pulse {
+  0%,
+  100% {
+    opacity: 0.55;
+    transform: scaleY(0.98);
+  }
+
+  50% {
+    opacity: 1;
+    transform: scaleY(1);
+  }
 }
 
 .answer-output-card,

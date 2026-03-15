@@ -1,4 +1,5 @@
 import {
+  act,
   fireEvent,
   render,
   screen,
@@ -19,6 +20,7 @@ describe("App", () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     vi.unstubAllGlobals();
     vi.unstubAllEnvs();
     window.history.replaceState({}, "", "/");
@@ -1592,15 +1594,42 @@ describe("App", () => {
     await waitFor(() => {
       expect(screen.getByText("Questionnaire rows")).toBeInTheDocument();
     });
-
-    fireEvent.click(screen.getByText("Generate answer"));
-
     await waitFor(() => {
-      expect(
-        screen.getByRole("button", { name: "Waiting for model response..." }),
-      ).toBeDisabled();
+      expect(screen.getByText("No drafting events yet")).toBeInTheDocument();
     });
 
+    vi.useFakeTimers();
+    fireEvent.click(screen.getByText("Generate answer"));
+
+    expect(
+      screen.getByRole("button", { name: "Waiting for model response..." }),
+    ).toBeDisabled();
+    expect(
+      screen.getByRole("heading", { name: "Generating draft" }),
+    ).toBeInTheDocument();
+    expect(screen.getByText("0s... Collecting evidence")).toBeInTheDocument();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(3000);
+    });
+    expect(screen.getByText("3s... Evidence collected")).toBeInTheDocument();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2000);
+    });
+    expect(screen.getByText("5s... Evidence collected")).toBeInTheDocument();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1000);
+    });
+    expect(screen.getByText("6s... Planning answer")).toBeInTheDocument();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(4000);
+    });
+    expect(screen.getByText("10s... Drafting answer")).toBeInTheDocument();
+
+    vi.useRealTimers();
     draftResolved = true;
     resolveDraftResponse(
       new Response(
@@ -1659,6 +1688,444 @@ describe("App", () => {
         ),
       ).not.toBeInTheDocument();
     });
+    expect(
+      screen.queryByRole("heading", { name: "Generating draft" }),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByText("10s... Drafting answer")).not.toBeInTheDocument();
+  });
+
+  it("appends a regenerating placeholder after existing draft history", async () => {
+    let resolveDraftResponse!: (value: Response) => void;
+    fetchMock.mockImplementation(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const method = init?.method ?? "GET";
+
+        if (url.endsWith("/api/session/context")) {
+          return new Response(
+            JSON.stringify({
+              tenant_id: "tenant-1",
+              tenant_slug: "local-workspace",
+              tenant_name: "Local Workspace",
+              user_id: "user-1",
+              user_email: "local.user.test",
+              user_name: "Local Admin",
+            }),
+          );
+        }
+
+        if (url.endsWith("/api/cases") && method === "GET") {
+          return new Response(
+            JSON.stringify([
+              {
+                id: "case-1",
+                name: "NordTransit Pilot",
+                client_name: "NordTransit",
+                language: "de",
+                status: "active",
+                created_at: "2026-03-06T10:00:00Z",
+                updated_at: "2026-03-06T10:00:00Z",
+              },
+            ]),
+          );
+        }
+
+        if (url.endsWith("/api/cases/case-1") && method === "GET") {
+          return new Response(
+            JSON.stringify({
+              id: "case-1",
+              name: "NordTransit Pilot",
+              client_name: "NordTransit",
+              language: "de",
+              status: "active",
+              created_at: "2026-03-06T10:00:00Z",
+              updated_at: "2026-03-06T10:00:00Z",
+              profile: null,
+              latest_bulk_fill: null,
+              questionnaire_rows: [
+                {
+                  id: "row-1",
+                  source_row_id: "workbook:QA:2",
+                  source_row_number: 2,
+                  context: "Shared context",
+                  question: "What fits the scope?",
+                  current_answer: "Existing generated draft",
+                  review_status: "needs_review",
+                  approved_answer_version_id: null,
+                  approved_answer_text: null,
+                  last_error_detail: null,
+                  latest_attempt_thread_id: "thread-1",
+                  latest_attempt_state: "answer_available",
+                },
+              ],
+              chats: [
+                {
+                  id: "thread-1",
+                  questionnaire_row_id: "row-1",
+                  title: "Row 2",
+                  updated_at: "2026-03-06T10:10:00Z",
+                },
+              ],
+            }),
+          );
+        }
+
+        if (
+          url.endsWith("/api/cases/case-1/rows/row-1/answers") &&
+          method === "GET"
+        ) {
+          return new Response(
+            JSON.stringify([
+              {
+                id: "answer-1",
+                chat_thread_id: "thread-1",
+                retrieval_run_id: "retrieval-1",
+                version_number: 1,
+                answer_text: "Existing generated draft",
+                status: "draft",
+                pipeline_profile_name: "default",
+                pipeline_config_hash: "cfg-1",
+                created_at: "2026-03-06T10:10:00Z",
+                model: "stub-ai-service",
+                generation_path: "two_stage_plan_render",
+                llm_capture_stage: "answer_rendering",
+                prompt_version: "answer_rendering_prompt.v2",
+                llm_capture_status: "captured",
+                llm_request_text: "Prompt body",
+                llm_response_text: "Existing generated draft",
+              },
+            ]),
+          );
+        }
+
+        if (
+          url.endsWith("/api/cases/case-1/threads/thread-1") &&
+          method === "GET"
+        ) {
+          return new Response(
+            JSON.stringify({
+              thread: {
+                id: "thread-1",
+                questionnaire_row_id: "row-1",
+                title: "Row 2",
+                updated_at: "2026-03-06T10:10:00Z",
+              },
+              thread_state: "answer_available",
+              messages: [
+                {
+                  id: "message-user-1",
+                  role: "user",
+                  content: "Generate a grounded answer for this row.",
+                  created_at: "2026-03-06T10:09:00Z",
+                  answer_version_id: null,
+                },
+                {
+                  id: "message-assistant-1",
+                  role: "assistant",
+                  content: "Existing generated draft",
+                  created_at: "2026-03-06T10:10:00Z",
+                  answer_version_id: "answer-1",
+                },
+              ],
+              answer_version: {
+                id: "answer-1",
+                chat_thread_id: "thread-1",
+                retrieval_run_id: "retrieval-1",
+                version_number: 1,
+                answer_text: "Existing generated draft",
+                status: "draft",
+                pipeline_profile_name: "default",
+                pipeline_config_hash: "cfg-1",
+                created_at: "2026-03-06T10:10:00Z",
+                model: "stub-ai-service",
+                generation_path: "two_stage_plan_render",
+                llm_capture_stage: "answer_rendering",
+                prompt_version: "answer_rendering_prompt.v2",
+                llm_capture_status: "captured",
+                llm_request_text: "Prompt body",
+                llm_response_text: "Existing generated draft",
+              },
+              retrieval: {
+                strategy_version: "retrieval.v2.hardened.v1",
+                pipeline_profile_name: "default",
+                pipeline_config_hash: "cfg-1",
+                index_config_hash: "index-1",
+                revision_mode: "initial_draft",
+                revision_classifier_version: "revision_classifier.v2",
+                revision_reason: "no_previous_answer_version",
+                retrieval_action: "refresh_retrieval",
+                retrieval_action_reason: "new_or_content_change_requires_refresh",
+                reused_from_retrieval_run_id: null,
+                candidate_generation_mode: "sql_keyword_scope_python_rerank",
+                broadened: false,
+                sufficiency: "weak",
+                degraded: false,
+                notes: [],
+                stages: [],
+              },
+              evidence: [],
+              failure_detail: null,
+            }),
+          );
+        }
+
+        if (
+          url.endsWith("/api/cases/case-1/rows/row-1/draft") &&
+          method === "POST"
+        ) {
+          return new Promise<Response>((resolve) => {
+            resolveDraftResponse = resolve;
+          });
+        }
+
+        return new Response(
+          JSON.stringify({ detail: `Unhandled request ${method} ${url}` }),
+          {
+            status: 500,
+          },
+        );
+      },
+    );
+
+    render(<App />);
+
+    await waitFor(() => {
+      expect(
+        screen.getByRole("button", { name: "Regenerate content" }),
+      ).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Regenerate content" }));
+    fireEvent.click(screen.getByRole("button", { name: "Regenerate answer" }));
+
+    await waitFor(() => {
+      expect(
+        screen.getByRole("heading", { name: "Regenerating draft" }),
+      ).toBeInTheDocument();
+    });
+
+    const existingDraftEntry = screen
+      .getByText("Existing generated draft")
+      .closest("article");
+    const progressEntry = screen
+      .getByRole("heading", { name: "Regenerating draft" })
+      .closest("article");
+    expect(existingDraftEntry).not.toBeNull();
+    expect(progressEntry).not.toBeNull();
+    expect(
+      existingDraftEntry!.compareDocumentPosition(progressEntry!) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+
+    resolveDraftResponse(
+      new Response(
+        JSON.stringify({
+          thread: {
+            id: "thread-1",
+            questionnaire_row_id: "row-1",
+            title: "Row 2",
+            updated_at: "2026-03-06T10:20:00Z",
+          },
+          messages: [
+            {
+              id: "message-user-1",
+              role: "user",
+              content: "Generate a grounded answer for this row.",
+              created_at: "2026-03-06T10:09:00Z",
+              answer_version_id: null,
+            },
+            {
+              id: "message-assistant-1",
+              role: "assistant",
+              content: "Existing generated draft",
+              created_at: "2026-03-06T10:10:00Z",
+              answer_version_id: "answer-1",
+            },
+            {
+              id: "message-user-2",
+              role: "user",
+              content: "Regenerate the answer with the latest grounded evidence.",
+              created_at: "2026-03-06T10:19:00Z",
+              answer_version_id: null,
+            },
+            {
+              id: "message-assistant-2",
+              role: "assistant",
+              content: "Regenerated draft",
+              created_at: "2026-03-06T10:20:00Z",
+              answer_version_id: "answer-2",
+            },
+          ],
+          answer_version: {
+            id: "answer-2",
+            chat_thread_id: "thread-1",
+            retrieval_run_id: "retrieval-2",
+            version_number: 2,
+            answer_text: "Regenerated draft",
+            status: "draft",
+            pipeline_profile_name: "default",
+            pipeline_config_hash: "cfg-2",
+            created_at: "2026-03-06T10:20:00Z",
+            model: "stub-ai-service",
+            generation_path: "two_stage_plan_render",
+            llm_capture_stage: "answer_rendering",
+            prompt_version: "answer_rendering_prompt.v2",
+            llm_capture_status: "captured",
+            llm_request_text: "Prompt body 2",
+            llm_response_text: "Regenerated draft",
+          },
+          retrieval: {
+            strategy_version: "retrieval.v2.hardened.v1",
+            pipeline_profile_name: "default",
+            pipeline_config_hash: "cfg-2",
+            index_config_hash: "index-2",
+            revision_mode: "content_change",
+            revision_classifier_version: null,
+            revision_reason: "explicit_content_change_override",
+            retrieval_action: "refresh_retrieval",
+            retrieval_action_reason: "new_or_content_change_requires_refresh",
+            reused_from_retrieval_run_id: null,
+            candidate_generation_mode: "sql_keyword_scope_python_rerank",
+            broadened: false,
+            sufficiency: "weak",
+            degraded: false,
+            notes: [],
+            stages: [],
+          },
+          evidence: [],
+        }),
+      ),
+    );
+
+    await waitFor(() => {
+      expect(
+        screen.queryByRole("heading", { name: "Regenerating draft" }),
+      ).not.toBeInTheDocument();
+    });
+  });
+
+  it("removes the progress placeholder when generation fails", async () => {
+    let resolveDraftResponse!: (value: Response) => void;
+    fetchMock.mockImplementation(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const method = init?.method ?? "GET";
+
+        if (url.endsWith("/api/session/context")) {
+          return new Response(
+            JSON.stringify({
+              tenant_id: "tenant-1",
+              tenant_slug: "local-workspace",
+              tenant_name: "Local Workspace",
+              user_id: "user-1",
+              user_email: "local.user.test",
+              user_name: "Local Admin",
+            }),
+          );
+        }
+
+        if (url.endsWith("/api/cases") && method === "GET") {
+          return new Response(
+            JSON.stringify([
+              {
+                id: "case-1",
+                name: "NordTransit Pilot",
+                client_name: "NordTransit",
+                language: "de",
+                status: "active",
+                created_at: "2026-03-06T10:00:00Z",
+                updated_at: "2026-03-06T10:00:00Z",
+              },
+            ]),
+          );
+        }
+
+        if (url.endsWith("/api/cases/case-1") && method === "GET") {
+          return new Response(
+            JSON.stringify({
+              id: "case-1",
+              name: "NordTransit Pilot",
+              client_name: "NordTransit",
+              language: "de",
+              status: "active",
+              created_at: "2026-03-06T10:00:00Z",
+              updated_at: "2026-03-06T10:00:00Z",
+              profile: null,
+              latest_bulk_fill: null,
+              questionnaire_rows: [
+                {
+                  id: "row-1",
+                  source_row_id: "workbook:QA:2",
+                  source_row_number: 2,
+                  context: "Shared context",
+                  question: "What fits the scope?",
+                  current_answer: "",
+                  review_status: "not_started",
+                  approved_answer_version_id: null,
+                  approved_answer_text: null,
+                  last_error_detail: null,
+                },
+              ],
+              chats: [],
+            }),
+          );
+        }
+
+        if (
+          url.endsWith("/api/cases/case-1/rows/row-1/answers") &&
+          method === "GET"
+        ) {
+          return new Response(JSON.stringify([]));
+        }
+
+        if (
+          url.endsWith("/api/cases/case-1/rows/row-1/draft") &&
+          method === "POST"
+        ) {
+          return new Promise<Response>((resolve) => {
+            resolveDraftResponse = resolve;
+          });
+        }
+
+        return new Response(
+          JSON.stringify({ detail: `Unhandled request ${method} ${url}` }),
+          {
+            status: 500,
+          },
+        );
+      },
+    );
+
+    render(<App />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Questionnaire rows")).toBeInTheDocument();
+    });
+    await waitFor(() => {
+      expect(screen.getByText("No drafting events yet")).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByText("Generate answer"));
+
+    await waitFor(() => {
+      expect(
+        screen.getByRole("heading", { name: "Generating draft" }),
+      ).toBeInTheDocument();
+    });
+
+    resolveDraftResponse(
+      new Response(JSON.stringify({ detail: "Model request failed." }), {
+        status: 500,
+      }),
+    );
+
+    await waitFor(() => {
+      expect(
+        screen.queryByRole("heading", { name: "Generating draft" }),
+      ).not.toBeInTheDocument();
+      expect(screen.getByText("No drafting events yet")).toBeInTheDocument();
+    });
+    expect(screen.queryByText(/Collecting evidence/)).not.toBeInTheDocument();
   });
 
   it("accepts render-only revise responses without changing the button contract", async () => {
