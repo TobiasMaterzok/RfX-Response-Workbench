@@ -3,6 +3,8 @@
 This repo supports a native Win11 local run path for the application itself.
 It still expects **PostgreSQL 16 + `pgvector`** as prerequisites for the local database.
 
+If you would rather keep Python, Node, and PostgreSQL inside Linux containers, or if corporate policy blocks local `npm`, use [docker-compose-setup.md](docker-compose-setup.md) instead.
+
 The repo-owned automation starts after those prerequisites exist:
 
 - it bootstraps the Python and frontend dependencies
@@ -18,7 +20,7 @@ Install these first:
 
 - Python 3.12+
 - Node.js 20+
-- PostgreSQL 16 with command-line tools (`psql.exe`) on `PATH`
+- a reachable PostgreSQL 16 instance
 - `pgvector` installed for that PostgreSQL instance so `vector` appears in `pg_available_extensions`
 
 Official prerequisite docs:
@@ -27,6 +29,12 @@ Official prerequisite docs:
 - pgvector Windows install notes: <https://github.com/pgvector/pgvector?tab=readme-ov-file#windows>
 
 The helper script in this repo does **not** install PostgreSQL, Visual Studio C++ tooling, or pgvector for you.
+For the native Win11 helper path, PostgreSQL may run either:
+
+- directly on Windows
+- inside a Docker container that exposes the configured port to Windows
+
+`init-db` uses the repo venv plus `psycopg`; it does not require host `psql.exe`.
 
 ## First-time local run
 
@@ -42,7 +50,7 @@ Edit the repo-root `.env` and set at least:
 
 - `RFX_DATABASE_URL`
 - `RFX_STORAGE_ROOT`
-- `OPENAI_API_KEY`
+- `LLM_API_KEY`
 
 Then initialize the local database and identity:
 
@@ -50,10 +58,26 @@ Then initialize the local database and identity:
 powershell -ExecutionPolicy Bypass -File .\scripts\windows\dev.ps1 init-db
 ```
 
+This works against any reachable PostgreSQL instance named in `RFX_DATABASE_URL`, including a Dockerized PostgreSQL + `pgvector` container exposed on `localhost`.
+
+If you are using the full Docker Compose app path from [docker-compose-setup.md](docker-compose-setup.md), do not run `dev.ps1 init-db`; the Compose `init` service already applies Alembic and ensures the local tenant/user.
+
 Sample/demo path:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\windows\dev.ps1 seed-sample
+```
+
+Use `seed-sample` only for the native or hybrid Win11 path where the backend and worker also run from the host repo checkout.
+
+- valid: host backend/worker with PostgreSQL running either on Windows or in Docker
+- not valid: the full Docker Compose app stack
+
+If you are running the full Compose app stack, seed through the backend container instead:
+
+```bash
+docker compose exec backend python -m app.cli import-historical-corpus
+docker compose exec backend python -m app.cli import-product-truth
 ```
 
 Real-customer/private corpus path:
@@ -77,14 +101,16 @@ powershell -ExecutionPolicy Bypass -File .\scripts\windows\dev.ps1 run-worker
 
 ## Troubleshooting
 
-### `psql.exe` is missing
-
-Install the PostgreSQL client tools and ensure `psql.exe` is on `PATH`.
-
 ### `vector` is unavailable
 
 The helper checks `pg_available_extensions` before running Alembic.
 If the helper reports that `vector` is unavailable, finish the pgvector installation for your PostgreSQL instance first, then rerun `init-db`.
+
+### PostgreSQL is in Docker
+
+Set `RFX_DATABASE_URL` to the host-exposed port, for example `postgresql+psycopg://postgres:postgres@localhost:5432/rfx_rag_expert`, then run `dev.ps1 init-db`.
+
+If you are running the full containerized app stack, skip the Win11 helper entirely and use the Compose flow in [docker-compose-setup.md](docker-compose-setup.md).
 
 ### PowerShell execution policy blocks the helper
 

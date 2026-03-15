@@ -32,6 +32,7 @@ from app.services.ai import (
     AIService,
     CaseProfileGenerationResult,
     embedding_model_name,
+    llm_provider_name,
     openai_sdk_version,
 )
 from app.services.hashing import sha256_text
@@ -178,7 +179,7 @@ def _record_case_profile_extraction_invocation(
         session,
         storage=storage,
         execution_run=repro_context.execution_run,
-        provider_name="openai" if embedding_model_name(ai_service) != "stub-ai-service" else "stub",
+        provider_name=llm_provider_name(ai_service),
         endpoint_kind="responses.parse",
         kind=ModelInvocationKind.CASE_PROFILE_EXTRACTION,
         requested_model_id=generation.requested_model_id,

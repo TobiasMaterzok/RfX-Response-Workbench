@@ -1,0 +1,135 @@
+name: rfx-rag-expert
+
+x-backend-service: &backend-service
+  build:
+    context: .
+    dockerfile: docker/backend.Dockerfile
+  environment:
+    RFX_DATABASE_URL: postgresql+psycopg://postgres:postgres@postgres:5432/rfx_rag_expert
+    RFX_STORAGE_ROOT: /app/storage
+    LLM_API_KEY: ${LLM_API_KEY:-}
+    OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+    AZURE_OPENAI_API_KEY: ${AZURE_OPENAI_API_KEY:-}
+    LLM_API_BASE_URL: ${LLM_API_BASE_URL:-}
+    OPENAI_BASE_URL: ${OPENAI_BASE_URL:-}
+    AZURE_OPENAI_API_BASE_URL: ${AZURE_OPENAI_API_BASE_URL:-}
+    RFX_OPENAI_RESPONSE_MODEL: ${RFX_OPENAI_RESPONSE_MODEL:-gpt-5.2}
+    RFX_OPENAI_EMBEDDING_MODEL: ${RFX_OPENAI_EMBEDDING_MODEL:-text-embedding-3-small}
+    RFX_LOCAL_TENANT_SLUG: ${RFX_LOCAL_TENANT_SLUG:-local-workspace}
+    RFX_LOCAL_TENANT_NAME: ${RFX_LOCAL_TENANT_NAME:-Local Workspace}
+    RFX_LOCAL_USER_EMAIL: ${RFX_LOCAL_USER_EMAIL:-local.user@example.test}
+    RFX_LOCAL_USER_NAME: ${RFX_LOCAL_USER_NAME:-Local Admin}
+  volumes:
+    - rfx-storage:/app/storage
+    - ./seed_data:/app/seed_data:ro
+  depends_on:
+    postgres:
+      condition: service_healthy
+    init:
+      condition: service_completed_successfully
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg18-trixie
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: rfx_rag_expert
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d rfx_rag_expert"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  init:
+    build:
+      context: .
+      dockerfile: docker/backend.Dockerfile
+    environment:
+      RFX_DATABASE_URL: postgresql+psycopg://postgres:postgres@postgres:5432/rfx_rag_expert
+      RFX_STORAGE_ROOT: /app/storage
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      AZURE_OPENAI_API_KEY: ${AZURE_OPENAI_API_KEY:-}
+      LLM_API_BASE_URL: ${LLM_API_BASE_URL:-}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-}
+      AZURE_OPENAI_API_BASE_URL: ${AZURE_OPENAI_API_BASE_URL:-}
+      RFX_OPENAI_RESPONSE_MODEL: ${RFX_OPENAI_RESPONSE_MODEL:-gpt-5.2}
+      RFX_OPENAI_EMBEDDING_MODEL: ${RFX_OPENAI_EMBEDDING_MODEL:-text-embedding-3-small}
+      RFX_LOCAL_TENANT_SLUG: ${RFX_LOCAL_TENANT_SLUG:-local-workspace}
+      RFX_LOCAL_TENANT_NAME: ${RFX_LOCAL_TENANT_NAME:-Local Workspace}
+      RFX_LOCAL_USER_EMAIL: ${RFX_LOCAL_USER_EMAIL:-local.user@example.test}
+      RFX_LOCAL_USER_NAME: ${RFX_LOCAL_USER_NAME:-Local Admin}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - rfx-storage:/app/storage
+      - ./seed_data:/app/seed_data:ro
+    command:
+      - sh
+      - -lc
+      - |
+        python -m alembic -c backend/alembic.ini upgrade head
+        python -m app.cli ensure-local-identity
+    restart: "no"
+
+  backend:
+    <<: *backend-service
+    restart: unless-stopped
+    command:
+      - python
+      - -m
+      - uvicorn
+      - app.main:app
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
+    ports:
+      - "127.0.0.1:8000:8000"
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request; urllib.request.urlopen("http://127.0.0.1:8000/health").read()
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  worker:
+    <<: *backend-service
+    restart: unless-stopped
+    command:
+      - python
+      - -m
+      - app.cli
+      - run-bulk-fill-worker
+      - --runner-id
+      - bulk-fill-worker.docker
+
+  frontend:
+    build:
+      context: .
+      dockerfile: docker/frontend.Dockerfile
+    restart: unless-stopped
+    environment:
+      VITE_API_BASE_URL: ${VITE_API_BASE_URL:-http://127.0.0.1:8000}
+      VITE_TENANT_SLUG: ${VITE_TENANT_SLUG:-local-workspace}
+      VITE_USER_EMAIL: ${VITE_USER_EMAIL:-local.user@example.test}
+      VITE_ENABLE_DEV_PANELS: ${VITE_ENABLE_DEV_PANELS:-false}
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:5173:5173"
+
+volumes:
+  postgres-data:
+  rfx-storage:

@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from importlib import metadata as importlib_metadata
 from typing import Any, Literal, Protocol, cast
+from urllib.parse import urlparse
 from uuid import UUID
 
 from openai import OpenAI
@@ -89,6 +90,25 @@ class CaseProfileGenerationResult:
 
 def openai_sdk_version() -> str:
     return importlib_metadata.version("openai")
+
+
+def llm_provider_name_from_settings(settings: Settings) -> str:
+    base_url = settings.llm_api_base_url
+    if not base_url:
+        return "openai"
+    parsed = urlparse(base_url)
+    host = (parsed.netloc or parsed.path).lower()
+    if host.endswith(".openai.azure.com") or host.endswith(".services.ai.azure.com"):
+        return "azure_openai"
+    if host in {"api.openai.com", "api.openai.com:443"}:
+        return "openai"
+    return "openai_compatible"
+
+
+def llm_provider_name(ai_service: AIService) -> str:
+    if isinstance(ai_service, OpenAIAIService):
+        return ai_service.provider_name
+    return "stub"
 
 
 def embedding_model_name(ai_service: AIService) -> str:
@@ -215,13 +235,21 @@ class OpenAIAIService:
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
         self._client: OpenAI | None = None
-        if settings.openai_api_key:
-            self._client = OpenAI(api_key=settings.openai_api_key)
+        if settings.llm_api_key:
+            client_kwargs: dict[str, object] = {"api_key": settings.llm_api_key}
+            if settings.llm_api_base_url:
+                client_kwargs["base_url"] = settings.llm_api_base_url
+            self._client = OpenAI(**client_kwargs)
+
+    @property
+    def provider_name(self) -> str:
+        return llm_provider_name_from_settings(self._settings)
 
     def _require_client(self) -> OpenAI:
         if self._client is None:
             raise ConfigurationFailure(
-                "OPENAI_API_KEY is required for embeddings and draft generation."
+                "LLM_API_KEY is required for embeddings and draft generation. "
+                "OPENAI_API_KEY remains accepted as a legacy alias."
             )
         return self._client
 
@@ -263,7 +291,9 @@ class OpenAIAIService:
         )
         output = response.output_parsed
         if output is None:
-            raise ValidationFailure("OpenAI returned no structured case-profile extraction output.")
+            raise ValidationFailure(
+                "The configured LLM provider returned no structured case-profile extraction output."
+            )
         actual_model_id = getattr(response, "model", None)
         document = _build_case_profile_document(
             extraction_output=output,
@@ -321,7 +351,9 @@ class OpenAIAIService:
         )
         answer_plan = response.output_parsed
         if answer_plan is None:
-            raise ValidationFailure("OpenAI returned no structured AnswerPlan output.")
+            raise ValidationFailure(
+                "The configured LLM provider returned no structured AnswerPlan output."
+            )
         return AnswerPlanGenerationResult(
             answer_plan=answer_plan,
             request_payload=request_payload,
@@ -370,7 +402,7 @@ class OpenAIAIService:
         raw_response_text = response.output_text
         answer = raw_response_text.strip()
         if not answer:
-            raise ValidationFailure("OpenAI returned an empty rendered answer.")
+            raise ValidationFailure("The configured LLM provider returned an empty rendered answer.")
         request_text = canonical_json_text(request_payload)
         return AnswerRenderGenerationResult(
             request_payload=request_payload,

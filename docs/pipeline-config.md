@@ -399,7 +399,7 @@ These are the explicit rebuild/reimport entry points for index-time sweeps on ex
 Important process-level prerequisite:
 
 - CLI flows read repo-root `.env` and process env, not the already-running backend process state
-- if the CLI process does not have `OPENAI_API_KEY`, embedding-backed and LLM-backed rebuild/import commands will fail even if the running backend instance was started with a key
+- if the CLI process does not have `LLM_API_KEY` or legacy `OPENAI_API_KEY`, embedding-backed and LLM-backed rebuild/import commands will fail even if the running backend instance was started with a key
 
 ### 4. What is sweepable today
 

@@ -41,7 +41,7 @@ The screenshots below use mocked sample data only. No customer files or local fi
 - Python 3.12+
 - Node.js 20+
 - PostgreSQL 16+ with the `vector` extension available
-- `OPENAI_API_KEY` for extraction, embeddings, answer generation, and seed import
+- `LLM_API_KEY` for extraction, embeddings, answer generation, and seed import
 - PowerShell 5.1+ or PowerShell 7+ for the Win11 helper script
 
 ## Quick Start On Windows 11
@@ -51,6 +51,7 @@ This repo supports a native Win11 local run path for the app itself. PostgreSQL 
 Start with the Win11 prerequisite guide:
 
 - [docs/windows-local-setup.md](docs/windows-local-setup.md)
+- [docs/docker-compose-setup.md](docs/docker-compose-setup.md) if you want the backend, frontend, worker, and PostgreSQL to run inside Linux containers instead of a native Win11 Python/Node setup
 
 ### 1. Bootstrap the repo
 
@@ -66,13 +67,20 @@ Edit the generated config files and set at least these repo-root `.env` values:
 
 - `RFX_DATABASE_URL`
 - `RFX_STORAGE_ROOT`
-- `OPENAI_API_KEY`
+- `LLM_API_KEY`
 
 The backend, Alembic, and CLI commands read the repo-root `.env` automatically.
 
 ### 3. Initialize the database and local identity
 
 This validates PostgreSQL reachability, creates the target database if missing, verifies that the `vector` extension is available, applies the migration, and creates the local tenant/user.
+
+For the native Win11 helper path, this can target either:
+
+- PostgreSQL running directly on Windows
+- PostgreSQL + `pgvector` running in Docker and exposed to Windows via `localhost`
+
+If you are using the full Docker Compose app stack below, skip this helper step because the Compose `init` service does it for you.
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\windows\dev.ps1 init-db
@@ -84,6 +92,13 @@ Sample/demo path:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\windows\dev.ps1 seed-sample
+```
+
+Use that helper only for the native or hybrid Win11 path where the backend and worker also run from the host repo checkout. If you are running the full Docker Compose app stack, seed through the backend container instead:
+
+```bash
+docker compose exec backend python -m app.cli import-historical-corpus
+docker compose exec backend python -m app.cli import-product-truth
 ```
 
 Real-customer/private corpus path:
@@ -118,6 +133,26 @@ powershell -ExecutionPolicy Bypass -File .\scripts\windows\dev.ps1 run-worker
 ```
 
 The backend listens on `http://127.0.0.1:8000` and the Vite frontend on `http://127.0.0.1:5173`.
+
+## Docker Compose On Win11/macOS/Linux
+
+This repo also supports a containerized local run path built around Linux containers for PostgreSQL + `pgvector`, the FastAPI backend, the Vite frontend, and the bulk-fill worker.
+This is the better path on locked-down Win11 systems where host `npm` is restricted.
+
+Quick path:
+
+```bash
+cp .env.example .env
+docker pull pgvector/pgvector:pg18-trixie
+docker compose up --build -d postgres backend frontend
+docker compose exec backend python -m app.cli import-historical-corpus
+docker compose exec backend python -m app.cli import-product-truth
+docker compose up -d worker
+```
+
+Open the UI from the host browser at `http://127.0.0.1:5173`.
+
+The full container guide, including Win11 notes and volume behavior, lives in [docs/docker-compose-setup.md](docs/docker-compose-setup.md).
 
 ## Quick Start On macOS/Linux
 
@@ -158,7 +193,7 @@ Set at least these values in the repo-root `.env`:
 
 - `RFX_DATABASE_URL`
 - `RFX_STORAGE_ROOT`
-- `OPENAI_API_KEY`
+- `LLM_API_KEY`
 
 The backend, Alembic, and CLI commands read the repo-root `.env` automatically. You do not need to `source` it for the documented commands.
 
@@ -286,6 +321,7 @@ Unix/macOS convenience aliases remain available through `make` for install, migr
 - [docs/product-truth-contract.md](docs/product-truth-contract.md)
 - [docs/pipeline-config.md](docs/pipeline-config.md)
 - [docs/reproducibility-architecture.md](docs/reproducibility-architecture.md)
+- [docs/docker-compose-setup.md](docs/docker-compose-setup.md)
 
 ## Boundary With External Evaluation
 

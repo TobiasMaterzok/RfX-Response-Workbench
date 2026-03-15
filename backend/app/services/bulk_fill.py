@@ -54,7 +54,10 @@ RESUMABLE_BULK_FILL_STATUSES = {
 }
 DEFAULT_BULK_FILL_MESSAGE = "Draft a grounded questionnaire answer for this row."
 STALE_CLAIM_AFTER = timedelta(minutes=10)
-MISSING_OPENAI_KEY_ERROR = "Bulk-fill worker requires OPENAI_API_KEY for row drafting."
+MISSING_LLM_KEY_ERROR = (
+    "Bulk-fill worker requires LLM_API_KEY for row drafting. "
+    "OPENAI_API_KEY remains accepted as a legacy alias."
+)
 
 
 def _record_event(
@@ -100,8 +103,8 @@ def _unapproved_rows(rows: list[QuestionnaireRow]) -> list[QuestionnaireRow]:
 
 
 def _ensure_bulk_fill_generation_available(container: ServiceContainer) -> None:
-    if isinstance(container.ai_service, OpenAIAIService) and not container.settings.openai_api_key:
-        raise ValidationFailure(MISSING_OPENAI_KEY_ERROR)
+    if isinstance(container.ai_service, OpenAIAIService) and not container.settings.llm_api_key:
+        raise ValidationFailure(MISSING_LLM_KEY_ERROR)
 
 
 def _active_request_for_case(session: Session, *, case_id: UUID) -> BulkFillRequest | None:

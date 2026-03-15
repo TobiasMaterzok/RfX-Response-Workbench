@@ -179,9 +179,6 @@ function Invoke-InitDb {
         throw "Missing .env at repo root. $script:BootstrapGuidance"
     }
 
-    $psqlExe = Resolve-CommandPath -Names @("psql.exe", "psql") -FailureMessage "psql.exe was not found on PATH. Install PostgreSQL 16 client tools first. See $script:WindowsSetupDoc."
-    Write-Step "Found psql at $psqlExe"
-
     $initDbPython = @'
 from __future__ import annotations
 

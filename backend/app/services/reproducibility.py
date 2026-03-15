@@ -168,6 +168,9 @@ def _alembic_head(session: Session) -> str | None:
 
 def _env_fingerprint(settings: Settings) -> dict[str, object]:
     return {
+        "llm_api_base_url": settings.llm_api_base_url,
+        "llm_response_model": settings.openai_response_model,
+        "llm_embedding_model": settings.openai_embedding_model,
         "openai_response_model": settings.openai_response_model,
         "openai_embedding_model": settings.openai_embedding_model,
         "storage_root": str(settings.storage_root.resolve()),
@@ -696,10 +699,10 @@ def embed_text_recorded(
     tokenizer_version: str | None = None,
     metadata_json: dict[str, object] | None = None,
 ) -> list[float]:
-    from app.services.ai import OpenAIAIService
+    from app.services.ai import llm_provider_name
 
     vector = ai_service.embed_text(text, model_id=model_id)
-    provider_name = "openai" if isinstance(ai_service, OpenAIAIService) else "stub"
+    provider_name = llm_provider_name(ai_service)
     record_model_invocation(
         session,
         storage=storage,
@@ -717,7 +720,7 @@ def embed_text_recorded(
         request_payload={"input": text},
         response_payload={"embedding": vector},
         provider_response_id=None,
-        sdk_version=importlib.metadata.version("openai") if provider_name == "openai" else None,
+        sdk_version=importlib.metadata.version("openai") if provider_name != "stub" else None,
         metadata_json=metadata_json,
     )
     return vector
@@ -735,10 +738,10 @@ def embed_text_with_invocation_recorded(
     tokenizer_version: str | None = None,
     metadata_json: dict[str, object] | None = None,
 ) -> tuple[list[float], ModelInvocation]:
-    from app.services.ai import OpenAIAIService
+    from app.services.ai import llm_provider_name
 
     vector = ai_service.embed_text(text, model_id=model_id)
-    provider_name = "openai" if isinstance(ai_service, OpenAIAIService) else "stub"
+    provider_name = llm_provider_name(ai_service)
     invocation = record_model_invocation(
         session,
         storage=storage,
@@ -756,7 +759,7 @@ def embed_text_with_invocation_recorded(
         request_payload={"input": text},
         response_payload={"embedding": vector},
         provider_response_id=None,
-        sdk_version=importlib.metadata.version("openai") if provider_name == "openai" else None,
+        sdk_version=importlib.metadata.version("openai") if provider_name != "stub" else None,
         metadata_json=metadata_json,
     )
     return vector, invocation

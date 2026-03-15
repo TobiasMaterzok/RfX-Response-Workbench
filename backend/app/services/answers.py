@@ -40,7 +40,7 @@ from app.pipeline.config import PipelineSelection, resolve_pipeline_selection
 from app.prompts.answer_planning import ANSWER_PLANNING_PROMPT_VERSION
 from app.prompts.answer_rendering import ANSWER_RENDERING_PROMPT_VERSION
 from app.schemas.answer_plan import AnswerPlan, NormalizedEvidenceItem
-from app.services.ai import AIService, OpenAIAIService, openai_sdk_version
+from app.services.ai import AIService, OpenAIAIService, llm_provider_name, openai_sdk_version
 from app.services.answer_prompting import (
     normalize_evidence_pack,
     normalize_target_language,
@@ -1126,7 +1126,7 @@ def draft_answer_for_row(
                 session,
                 storage=None,
                 execution_run=row_run,
-                provider_name="openai" if isinstance(ai_service, OpenAIAIService) else "stub",
+                provider_name=llm_provider_name(ai_service),
                 endpoint_kind="responses.parse",
                 kind=ModelInvocationKind.ANSWER_GENERATION,
                 requested_model_id=planning_result.requested_model_id,
@@ -1200,7 +1200,7 @@ def draft_answer_for_row(
             session,
             storage=None,
             execution_run=row_run,
-            provider_name="openai" if isinstance(ai_service, OpenAIAIService) else "stub",
+            provider_name=llm_provider_name(ai_service),
             endpoint_kind="responses.create",
             kind=ModelInvocationKind.ANSWER_GENERATION,
             requested_model_id=render_result.requested_model_id,

@@ -106,7 +106,7 @@ def import_historical_corpus_command(
     except SQLAlchemyError as exc:
         typer.echo(
             "Seed import failed. "
-            f"Run `{ROOT_ALEMBIC_UPGRADE_COMMAND}` first and ensure OPENAI_API_KEY is set for embeddings. "
+            f"Run `{ROOT_ALEMBIC_UPGRADE_COMMAND}` first and ensure LLM_API_KEY is set for embeddings. "
             f"On Win11, see `{WINDOWS_LOCAL_SETUP_DOC}`."
         )
         raise typer.Exit(code=1) from exc
